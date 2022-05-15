@@ -27,8 +27,9 @@ contract DepositBridgeTest is DSTest {
     uint256 WETH_SLOT = 3;
     DefiBridgeProxy defiBridgeProxy;
     RollupProcessor rollupProcessor;
-    event TokenBalance(uint256 balance);
+    event TokenBalance(uint256 previousBalance, uint256 newBalance);
 
+    uint256 nonce = 1;
     DepositBridge bridge;
     AztecTypes.AztecAsset private empty;
 
@@ -45,27 +46,45 @@ contract DepositBridgeTest is DSTest {
             address(rollupProcessor)
         );
 
-        rollupProcessor.setBridgeGasLimit(address(bridge), 1000000);
+        rollupProcessor.setBridgeGasLimit(address(bridge), 2000000);
 
     }
     function testDepositBridge() public{
         validateDepositBridge(1000,500);
     }
     function validateDepositBridge(uint256 balance, uint256 depositAmount) public {
-        _setTokenBalance(WETH, address(rollupProcessor), balance,WETH_SLOT);
+        _setTokenBalance(WETH, address(rollupProcessor), balance*3,WETH_SLOT);
 
         //Deposit to Pool
         uint256 output = depositToPool(WETH, tWETH, depositAmount);
+        nonce += 1;
 
         //Request Withdraw
         requestWithdrawFromPool(WETH, tWETH, output);
-
+        nonce += 1;
+        
         //Next Cycle
         uint256 newTimestamp = 1748641030;
         vm.warp(newTimestamp);
         vm.startPrank(DEPLOYER);
         IManager(MANAGER).completeRollover("complete");
         IManager(MANAGER).completeRollover("complete2");
+        vm.stopPrank();
+
+        
+        //Test if automatic process withdrawal working
+        uint256 output2 = depositToPool(WETH, tWETH, depositAmount * 2);
+        nonce += 1;
+
+        //Request Withdraw
+        requestWithdrawFromPool(WETH, tWETH, output2);
+
+        //Next Cycle
+        newTimestamp = 1758641030;
+        vm.warp(newTimestamp);
+        vm.startPrank(DEPLOYER);
+        IManager(MANAGER).completeRollover("complete3");
+        IManager(MANAGER).completeRollover("complete4");
         vm.stopPrank();
 
         //Withdraw
@@ -99,12 +118,11 @@ contract DepositBridgeTest is DSTest {
             wtAsset,
             empty,
             depositAmount,
-            2,
+            nonce,
             0
         );
         uint256 afterBalance = assetToken.balanceOf(address(rollupProcessor));
-        assertTrue(afterBalance < beforeBalance);
-
+        emit TokenBalance(beforeBalance, afterBalance);
         return outputValueA;
     }
     function requestWithdrawFromPool(address asset,address tAsset,uint256 depositAmount) public returns(uint256){
@@ -132,7 +150,7 @@ contract DepositBridgeTest is DSTest {
             wAsset,
             empty,
             depositAmount,
-            2,
+            nonce,
             0
         );
 
@@ -145,10 +163,10 @@ contract DepositBridgeTest is DSTest {
         (
             bool completed
         ) = rollupProcessor.processAsyncDefiInteraction(
-            2
+            nonce
         );
         uint256 afterBalance = assetToken.balanceOf(address(rollupProcessor));
-        assertTrue(afterBalance > beforeBalance);
+        emit TokenBalance(beforeBalance, afterBalance);
 
     }
     

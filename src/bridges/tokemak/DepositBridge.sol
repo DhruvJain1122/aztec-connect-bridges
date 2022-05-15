@@ -8,6 +8,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 import { IDefiBridge } from "../../interfaces/IDefiBridge.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IRollupProcessor} from '../../interfaces/IRollupProcessor.sol';
 
 import { AztecTypes } from "../../aztec/AztecTypes.sol";
 interface Ttoken is IERC20{
@@ -41,7 +42,28 @@ contract DepositBridge is IDefiBridge {
 
   address public immutable rollupProcessor;
 
+
+
+  uint256 internal constant MAX_UINT = type(uint256).max;
+
+  uint256 internal constant MIN_GAS_FOR_CHECK_AND_FINALISE = 50000;
+  uint256 internal constant MIN_GAS_FOR_FUNCTION_COMPLETION = 5000;
+  uint256 internal constant MIN_GAS_FOR_FAILED_INTERACTION = 20000;
+  uint256 internal constant MIN_GAS_FOR_EXPIRY_REMOVAL = 25000;
+
+
   mapping(address=> uint256) pendingWithdarawls;
+
+  struct Interaction {
+      uint256 inputValue;
+      address tAsset;
+  }
+
+
+  uint256[] nonces;
+  // cache of all of our Defi interactions. keyed on nonce
+  mapping(uint256 => Interaction) public pendingInteractions;
+
   constructor(address _rollupProcessor) public {
     rollupProcessor = _rollupProcessor;
     
@@ -77,13 +99,15 @@ contract DepositBridge is IDefiBridge {
     require(tAsset != address(0),"Tokemak DepositBridge: INVALID_INPUT");
 
     // Withdraw or Deposit 
-    (outputValueA,isAsync) = isWithdrawal ? _withdraw(tAsset, totalInputValue) : _deposit(tAsset, totalInputValue, inputAssetA.erc20Address);
+    (outputValueA,isAsync) = isWithdrawal ? addWithdrawalNonce(interactionNonce, tAsset, totalInputValue) : _deposit(tAsset, totalInputValue, inputAssetA.erc20Address);
+
+    finalisePendingInteractions(MIN_GAS_FOR_FUNCTION_COMPLETION);
 
   }
 
-  function _withdraw(address tAsset, uint256 inputValue) private returns (uint256 outputValue,bool isAsync) {
-    Ttoken tToken = Ttoken(tAsset);
-
+  function _canWithdraw(address tAsset, uint256 inputValue) private returns (bool){
+       Ttoken tToken = Ttoken(tAsset);
+    
     // Get our current request withdrawal data
     (uint256 minCycle, uint256 requestedWithdrawalAmount) = tToken.requestedWithdrawals(address(this));
 
@@ -92,21 +116,33 @@ contract DepositBridge is IDefiBridge {
 
     // Check if need to request for withdraw first
     if(inputValue > requestedWithdrawalAmount){
-      isAsync = true;
-      outputValue = 0;
-      tToken.requestWithdrawal(inputValue);
-      pendingWithdarawls[tAsset] += inputValue;
-      return (outputValue, isAsync);
+      return false;
     }
 
     //Check if the withdrawal request is complete
     if(currentCycleIndex < minCycle){
-      isAsync = true;
-      outputValue = 0;
-      pendingWithdarawls[tAsset] += inputValue;
-      return (outputValue, isAsync);
+      return false;
     }
+    return true;
+  }
 
+  function addWithdrawalNonce(uint256 nonce, address tAsset, uint256 inputValue) private returns (uint256,bool ){
+    Ttoken tToken = Ttoken(tAsset);
+             tToken.requestWithdrawal(inputValue);
+
+    nonces.push(nonce);
+    pendingInteractions[nonce] =  Interaction(inputValue,tAsset);
+    return (0, false);
+  }
+
+  function _finaliseWithdraw(address tAsset, uint256 inputValue, uint256 nonce) private returns (uint256 outputValue,bool isAsync) {
+    Ttoken tToken = Ttoken(tAsset);
+
+    if(!_canWithdraw(tAsset,inputValue)){
+        isAsync = true;
+        outputValue = 0;
+        return (outputValue, isAsync);
+    }
     // Approve Tokemak Pool to transfer tAsset
     tToken.approve(tAsset, inputValue);
 
@@ -131,7 +167,10 @@ contract DepositBridge is IDefiBridge {
 
     //Approve Rollup Processor to withdraw asset
     assetToken.approve(rollupProcessor, outputValue);
+
+    delete pendingInteractions[nonce];
   }
+
   function _deposit(address tAsset, uint256 inputValue, address asset) private returns (uint256 outputValue,bool isAsync) {
     // Approve asset to deposit in Tokemak Pool
     IERC20(asset).approve(tAsset, inputValue);
@@ -210,7 +249,7 @@ contract DepositBridge is IDefiBridge {
     require(inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20, "Tokemak DepositBridge: INVALID_ASSET_TYPE");
 
     // Pending withdrawal value
-    uint256 inputValue = pendingWithdarawls[inputAssetA.erc20Address];
+    uint256 inputValue = pendingInteractions[interactionNonce].inputValue;
     if(inputValue > 0){
         require(msg.sender == rollupProcessor, "Tokemak DepositBridge: INVALID_CALLER");
         require(inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20, "Tokemak DepositBridge: INVALID_ASSET_TYPE");
@@ -219,7 +258,75 @@ contract DepositBridge is IDefiBridge {
         require(tAsset != address(0),"Tokemak DepositBridge: INVALID_INPUT");
 
         // Withdraw pending withdrawals
-        (outputValueA,isAsync) =  _withdraw(tAsset, inputValue);
+        (outputValueA,isAsync) =  _finaliseWithdraw(tAsset, inputValue, interactionNonce);
     }
   }
+
+    /**
+     * @dev Function to attempt finalising of as many interactions as possible within the specified gas limit
+     * Continue checking for and finalising interactions until we expend the available gas
+     * @param gasFloor The amount of gas that needs to remain after this call has completed
+     */
+    function finalisePendingInteractions(uint256 gasFloor) internal {
+        // check and finalise interactions until we don't have enough gas left to reliably update our state without risk of reverting the entire transaction
+        // gas left must be enough for check for next expiry, finalise and leave this function without breaching gasFloor
+        uint256 gasLoopCondition = MIN_GAS_FOR_CHECK_AND_FINALISE + MIN_GAS_FOR_FUNCTION_COMPLETION + gasFloor;
+        uint256 ourGasFloor = MIN_GAS_FOR_FUNCTION_COMPLETION + gasFloor;
+        while (gasleft() > gasLoopCondition) {
+            // check the heap to see if we can finalise an expired transaction
+            // we provide a gas floor to the function which will enable us to leave this function without breaching our gasFloor
+            (bool available, uint256 nonce) = checkForNextInteractionToFinalise(ourGasFloor);
+            if (!available) {
+                break;
+            }
+            // make sure we will have at least ourGasFloor gas after the finalise in order to exit this function
+            uint256 gasRemaining = gasleft();
+            if (gasRemaining <= ourGasFloor) {
+                break;
+            }
+            uint256 gasForFinalise = gasRemaining - ourGasFloor;
+            // make the call to finalise the interaction with the gas limit        
+            try IRollupProcessor(rollupProcessor).processAsyncDefiInteraction{gas: gasForFinalise}(nonce) returns (bool interactionCompleted) {
+                // no need to do anything here, we just need to know that the call didn't throw
+            } catch {
+                break;
+            }
+        }
+    }
+  
+    /**
+     * @dev Function to get the next interaction to finalise
+     * @param gasFloor The amount of gas that needs to remain after this call has completed
+     */
+    function checkForNextInteractionToFinalise(uint256 gasFloor)
+        internal
+        returns (
+            bool ,
+            uint256 
+        )
+    {
+        // do we have any expiries and if so is the earliest expiry now expired
+        if (nonces.length == 0) {
+            return (false, 0);
+        }
+       
+        uint256 minGasForLoop = (gasFloor + MIN_GAS_FOR_FAILED_INTERACTION);
+        for(uint i = 0; i < nonces.length;i++){
+          uint256 nonce = nonces[i];
+          if(nonce == 0){
+            continue;
+          }
+
+          Interaction storage interaction = pendingInteractions[nonce];
+          if(interaction.inputValue == 0){
+            continue;
+          }
+
+          if(_canWithdraw(interaction.tAsset, interaction.inputValue)){
+            return (true, nonce);
+          }
+
+        }
+        return (false, 0);
+    }
 }
