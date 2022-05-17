@@ -46,10 +46,8 @@ contract DepositBridge is IDefiBridge {
 
   uint256 internal constant MAX_UINT = type(uint256).max;
 
-  uint256 internal constant MIN_GAS_FOR_CHECK_AND_FINALISE = 50000;
+  uint256 internal constant MIN_GAS_FOR_CHECK_AND_FINALISE = 83000;
   uint256 internal constant MIN_GAS_FOR_FUNCTION_COMPLETION = 5000;
-  uint256 internal constant MIN_GAS_FOR_FAILED_INTERACTION = 20000;
-  uint256 internal constant MIN_GAS_FOR_EXPIRY_REMOVAL = 25000;
 
 
   mapping(address=> uint256) pendingWithdarawls;
@@ -132,7 +130,7 @@ contract DepositBridge is IDefiBridge {
 
     nonces.push(nonce);
     pendingInteractions[nonce] =  Interaction(inputValue,tAsset);
-    return (0, false);
+    return (0, true);
   }
 
   function _finaliseWithdraw(address tAsset, uint256 inputValue, uint256 nonce) private returns (uint256 outputValue,bool isAsync) {
@@ -169,6 +167,12 @@ contract DepositBridge is IDefiBridge {
     assetToken.approve(rollupProcessor, outputValue);
 
     delete pendingInteractions[nonce];
+    for(uint i = 0;i < nonces.length;i++){
+      if(nonces[i] == nonce){
+        delete nonces[i];
+        break;
+      }
+    }
   }
 
   function _deposit(address tAsset, uint256 inputValue, address asset) private returns (uint256 outputValue,bool isAsync) {
@@ -245,21 +249,21 @@ contract DepositBridge is IDefiBridge {
     AztecTypes.AztecAsset calldata outputAssetB,
     uint256 interactionNonce,
     uint64 auxData
-  ) external payable override returns (uint256 outputValueA, uint256 outputValueB, bool isAsync) {
+  ) external payable override returns (uint256 outputValueA, uint256 outputValueB, bool interactionCompleted ) {
+    require(inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20, "Tokemak DepositBridge: INVALID_ASSET_TYPE");
+    require(msg.sender == rollupProcessor, "Tokemak DepositBridge: INVALID_CALLER");
     require(inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20, "Tokemak DepositBridge: INVALID_ASSET_TYPE");
 
     // Pending withdrawal value
     uint256 inputValue = pendingInteractions[interactionNonce].inputValue;
-    if(inputValue > 0){
-        require(msg.sender == rollupProcessor, "Tokemak DepositBridge: INVALID_CALLER");
-        require(inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20, "Tokemak DepositBridge: INVALID_ASSET_TYPE");
+    require(inputValue > 0);
         
-        address tAsset = inputAssetA.erc20Address;
-        require(tAsset != address(0),"Tokemak DepositBridge: INVALID_INPUT");
-
-        // Withdraw pending withdrawals
-        (outputValueA,isAsync) =  _finaliseWithdraw(tAsset, inputValue, interactionNonce);
-    }
+    address tAsset = inputAssetA.erc20Address;
+    require(tAsset != address(0),"Tokemak DepositBridge: INVALID_INPUT");
+    bool isAsync = true;
+    // Withdraw pending withdrawals
+    (outputValueA, isAsync) =  _finaliseWithdraw(tAsset, inputValue, interactionNonce);
+    interactionCompleted = !isAsync;
   }
 
     /**
@@ -310,9 +314,11 @@ contract DepositBridge is IDefiBridge {
             return (false, 0);
         }
        
-        uint256 minGasForLoop = (gasFloor + MIN_GAS_FOR_FAILED_INTERACTION);
-        for(uint i = 0; i < nonces.length;i++){
+        uint256 minGasForLoop = gasFloor;
+        uint i = 0;
+        while(i < nonces.length && gasleft() >= minGasForLoop){
           uint256 nonce = nonces[i];
+          i++;
           if(nonce == 0){
             continue;
           }
@@ -325,7 +331,6 @@ contract DepositBridge is IDefiBridge {
           if(_canWithdraw(interaction.tAsset, interaction.inputValue)){
             return (true, nonce);
           }
-
         }
         return (false, 0);
     }
