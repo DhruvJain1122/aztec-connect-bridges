@@ -59,6 +59,7 @@ contract DepositBridge is IDefiBridge {
 
 
   uint256[] nonces;
+
   // cache of all of our Defi interactions. keyed on nonce
   mapping(uint256 => Interaction) public pendingInteractions;
 
@@ -89,6 +90,7 @@ contract DepositBridge is IDefiBridge {
     // // ### INITIALIZATION AND SANITY CHECKS
     require(msg.sender == rollupProcessor, "Tokemak DepositBridge: INVALID_CALLER");
     require(inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20, "Tokemak DepositBridge: INVALID_ASSET_TYPE");
+    require(outputAssetA.assetType == AztecTypes.AztecAssetType.ERC20, "Tokemak DepositBridge: INVALID_ASSET_TYPE");
 
     // Check whether the call is for withdrawal or deposit
     bool isWithdrawal = _isWithdrawal(inputAssetA.erc20Address);
@@ -97,7 +99,15 @@ contract DepositBridge is IDefiBridge {
     require(tAsset != address(0),"Tokemak DepositBridge: INVALID_INPUT");
 
     // Withdraw or Deposit 
-    (outputValueA,isAsync) = isWithdrawal ? addWithdrawalNonce(interactionNonce, tAsset, totalInputValue) : _deposit(tAsset, totalInputValue, inputAssetA.erc20Address);
+    outputValueB = 0;
+    if (isWithdrawal) {
+        isAsync = true;
+        outputValueA = 0;
+        addWithdrawalNonce(...);
+    } else {
+        isAsync = false;
+        outputValueA =  _deposit(...);
+    }
 
     finalisePendingInteractions(MIN_GAS_FOR_FUNCTION_COMPLETION);
 
@@ -126,20 +136,20 @@ contract DepositBridge is IDefiBridge {
 
   function addWithdrawalNonce(uint256 nonce, address tAsset, uint256 inputValue) private returns (uint256,bool ){
     Ttoken tToken = Ttoken(tAsset);
-             tToken.requestWithdrawal(inputValue);
+    tToken.requestWithdrawal(inputValue);
 
     nonces.push(nonce);
     pendingInteractions[nonce] =  Interaction(inputValue,tAsset);
     return (0, true);
   }
 
-  function _finaliseWithdraw(address tAsset, uint256 inputValue, uint256 nonce) private returns (uint256 outputValue,bool isAsync) {
+  function _finaliseWithdraw(address tAsset, uint256 inputValue, uint256 nonce) private returns (uint256 outputValue,bool withdrawComplete) {
     Ttoken tToken = Ttoken(tAsset);
 
     if(!_canWithdraw(tAsset,inputValue)){
-        isAsync = true;
+        withdrawComplete = false;
         outputValue = 0;
-        return (outputValue, isAsync);
+        return (outputValue, withdrawComplete);
     }
     // Approve Tokemak Pool to transfer tAsset
     tToken.approve(tAsset, inputValue);
@@ -175,7 +185,7 @@ contract DepositBridge is IDefiBridge {
     }
   }
 
-  function _deposit(address tAsset, uint256 inputValue, address asset) private returns (uint256 outputValue,bool isAsync) {
+  function _deposit(address tAsset, uint256 inputValue, address asset) private returns (uint256 outputValue) {
     // Approve asset to deposit in Tokemak Pool
     IERC20(asset).approve(tAsset, inputValue);
 
@@ -244,15 +254,15 @@ contract DepositBridge is IDefiBridge {
 
   function finalise(
     AztecTypes.AztecAsset calldata inputAssetA,
-    AztecTypes.AztecAsset calldata inputAssetB,
+    AztecTypes.AztecAsset calldata,
     AztecTypes.AztecAsset calldata outputAssetA,
-    AztecTypes.AztecAsset calldata outputAssetB,
+    AztecTypes.AztecAsset calldata,
     uint256 interactionNonce,
     uint64 auxData
   ) external payable override returns (uint256 outputValueA, uint256 outputValueB, bool interactionCompleted ) {
     require(inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20, "Tokemak DepositBridge: INVALID_ASSET_TYPE");
+    require(outputAssetA.assetType == AztecTypes.AztecAssetType.ERC20, "Tokemak DepositBridge: INVALID_ASSET_TYPE");
     require(msg.sender == rollupProcessor, "Tokemak DepositBridge: INVALID_CALLER");
-    require(inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20, "Tokemak DepositBridge: INVALID_ASSET_TYPE");
 
     // Pending withdrawal value
     uint256 inputValue = pendingInteractions[interactionNonce].inputValue;
@@ -260,10 +270,8 @@ contract DepositBridge is IDefiBridge {
         
     address tAsset = inputAssetA.erc20Address;
     require(tAsset != address(0),"Tokemak DepositBridge: INVALID_INPUT");
-    bool isAsync = true;
     // Withdraw pending withdrawals
-    (outputValueA, isAsync) =  _finaliseWithdraw(tAsset, inputValue, interactionNonce);
-    interactionCompleted = !isAsync;
+    (outputValueA, interactionCompleted) =  _finaliseWithdraw(tAsset, inputValue, interactionNonce);
   }
 
     /**
@@ -334,4 +342,5 @@ contract DepositBridge is IDefiBridge {
         }
         return (false, 0);
     }
+ 
 }
