@@ -101,10 +101,10 @@ contract DepositBridge is IDefiBridge {
     if (isWithdrawal) {
         isAsync = true;
         outputValueA = 0;
-        addWithdrawalNonce(...);
+        addWithdrawalNonce(interactionNonce, tAsset, totalInputValue);
     } else {
         isAsync = false;
-        outputValueA =  _deposit(...);
+        outputValueA =  _deposit(tAsset, totalInputValue, inputAssetA.erc20Address);
     }
 
     finalisePendingInteractions(MIN_GAS_FOR_FUNCTION_COMPLETION);
