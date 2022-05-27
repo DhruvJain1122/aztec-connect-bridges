@@ -12,7 +12,6 @@ import '../libraries/LiquidityAmounts.sol';
 
 import './PeripheryPayments.sol';
 import './PeripheryImmutableState.sol';
-import {console} from "../../../test/console.sol";
 
 
 /// @title Liquidity management functions

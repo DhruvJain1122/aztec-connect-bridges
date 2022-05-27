@@ -8,11 +8,7 @@ import {IERC20} from "../interfaces/IERC20Permit.sol";
 import {DefiBridgeProxy} from "./DefiBridgeProxy.sol";
 import {AztecTypes} from "./AztecTypes.sol";
 
-import "../../lib/ds-test/src/test.sol";
-
-import { console } from '../test/console.sol';
-
-contract RollupProcessor is DSTest {
+contract RollupProcessor {
     DefiBridgeProxy private bridgeProxy;
 
     struct DefiInteraction {
@@ -24,6 +20,9 @@ contract RollupProcessor is DSTest {
         uint256 totalInputValue;
         uint256 interactionNonce;
         uint256 auxInputData; // (auxData)
+        uint256 outputValueA;
+        uint256 outputValueB;
+        bool finalised;
     }
 
     uint256 private constant NUMBER_OF_BRIDGE_CALLS = 32;
@@ -73,7 +72,12 @@ contract RollupProcessor is DSTest {
         limit = limit == 0 ? 200000 : limit;
     }
 
-    mapping(uint256 => DefiInteraction) private defiInteractions;
+    function getDefiResult(uint256 nonce) public returns (bool finalised, uint256 outputValueA) {
+        finalised = defiInteractions[nonce].finalised;
+        outputValueA = defiInteractions[nonce].outputValueA;
+    }
+
+    mapping(uint256 => DefiInteraction) public defiInteractions;
 
     constructor(address _bridgeProxyAddress) {
         bridgeProxy = DefiBridgeProxy(_bridgeProxyAddress);
@@ -178,6 +182,9 @@ contract RollupProcessor is DSTest {
             outputValueB,
             true
         );
+        interaction.finalised = true;
+        interaction.outputValueA = outputValueA;
+        interaction.outputValueB = outputValueB;
     }
 
     struct ConvertArgs {
@@ -209,7 +216,10 @@ contract RollupProcessor is DSTest {
             convertArgs.outputAssetB,
             convertArgs.totalInputValue,
             convertArgs.interactionNonce,
-            convertArgs.auxInputData
+            convertArgs.auxInputData,
+            0,
+            0,
+            false
         );
         uint256 gas = bridgeGasLimits[convertArgs.bridgeAddress]  > 0 ? bridgeGasLimits[convertArgs.bridgeAddress]: uint256(150000000);
 
