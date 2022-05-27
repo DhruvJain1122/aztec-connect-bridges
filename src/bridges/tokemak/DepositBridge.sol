@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright 2020 Spilsbury Holdings Ltd
-pragma solidity >=0.6.10 <=0.8.10;
+pragma solidity >=0.8.4;
 pragma experimental ABIEncoderV2;
 
-import { SafeMath } from "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import { IDefiBridge } from "../../interfaces/IDefiBridge.sol";
@@ -22,7 +21,6 @@ interface IManager {
   function getCurrentCycleIndex() external view returns (uint256);
 }
 contract DepositBridge is IDefiBridge {
-  using SafeMath for uint256;
     using SafeERC20 for IERC20;
     event TokenBalance(uint256 balance);
 
