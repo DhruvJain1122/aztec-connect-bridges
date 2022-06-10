@@ -145,7 +145,7 @@ contract DepositBridgeTest is DSTest {
             empty,
             depositAmount,
             nonce,
-            0
+            1
         );
 
         return outputValueA;
