@@ -100,7 +100,7 @@ contract DepositBridge is IDefiBridge {
             if (assets[inputAssetA.erc20Address] != outputAssetA.erc20Address)
                 revert InvalidAsset(inputAssetA.erc20Address);
         } else {
-            if (tTokens[inputAssetA.erc20Address] == outputAssetA.erc20Address)
+            if (tTokens[inputAssetA.erc20Address] != outputAssetA.erc20Address)
                 revert InvalidAsset(inputAssetA.erc20Address);
         }
 
