@@ -30,7 +30,7 @@ interface IManager {
     function getPools() external view returns (address[] memory);
 }
 
-contract DepositBridge is IDefiBridge {
+contract TokemakBridge is IDefiBridge {
     using SafeERC20 for IERC20;
 
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
@@ -44,8 +44,6 @@ contract DepositBridge is IDefiBridge {
     uint256 internal constant MIN_GAS_FOR_CHECK_AND_FINALISE = 83000;
     uint256 internal constant MIN_GAS_FOR_FUNCTION_COMPLETION = 5000;
 
-    mapping(address => uint256) pendingWithdarawls;
-
     mapping(address => address) tTokens;
     mapping(address => address) assets;
 
@@ -57,9 +55,15 @@ contract DepositBridge is IDefiBridge {
     struct Interaction {
         uint256 inputValue;
         address tAsset;
+        uint256 nextNonce;
+        uint256 previousNonce;
     }
 
-    uint256[] nonces;
+    uint256 lastProcessedNonce;
+
+    uint256 lastAddedNonce;
+
+    uint256 firstAddedNonce;
 
     // cache of all of our Defi interactions. keyed on nonce
     mapping(uint256 => Interaction) public pendingInteractions;
@@ -94,7 +98,7 @@ contract DepositBridge is IDefiBridge {
         if (outputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert InvalidAssetType();
 
         // Check whether the call is for withdrawal or deposit
-        bool isWithdrawal = auxData == 0 ? false : true;
+        bool isWithdrawal = auxData != 0;
 
         if (isWithdrawal) {
             if (assets[inputAssetA.erc20Address] != outputAssetA.erc20Address)
@@ -160,7 +164,7 @@ contract DepositBridge is IDefiBridge {
             Ttoken token = Ttoken(pool);
 
             address asset = token.underlyer();
-            IERC20 assetToken = IERC20(address(asset));
+            IERC20 assetToken = IERC20(asset);
 
             assetToken.approve(rollupProcessor, MAX_UINT);
             assetToken.approve(pool, MAX_UINT);
@@ -212,28 +216,31 @@ contract DepositBridge is IDefiBridge {
      */
     function checkForNextInteractionToFinalise(uint256 gasFloor) internal returns (bool, uint256) {
         // do we have any expiries and if so is the earliest expiry now expired
-        if (nonces.length == 0) {
+        uint256 nonce = lastProcessedNonce;
+        if(nonce == 0 && firstAddedNonce != 0){
+            Interaction storage interaction = pendingInteractions[firstAddedNonce];
+            if (interaction.inputValue != 0 && canWithdraw(interaction.tAsset, interaction.inputValue)) {
+                return (true, firstAddedNonce);
+            }
+            nonce = firstAddedNonce;
+        }
+
+        if (pendingInteractions[nonce].nextNonce == 0 ) {
             return (false, 0);
         }
 
         uint256 minGasForLoop = gasFloor + MIN_GAS_FOR_CHECK_AND_FINALISE;
-        uint256 i = 0;
-        while (i < nonces.length && gasleft() >= minGasForLoop) {
-            uint256 nonce = nonces[i];
-            i++;
-            if (nonce == 0) {
-                continue;
-            }
-
+        while (pendingInteractions[nonce].nextNonce != 0 && gasleft() >= minGasForLoop){
             Interaction storage interaction = pendingInteractions[nonce];
             if (interaction.inputValue == 0) {
                 continue;
             }
-
             if (canWithdraw(interaction.tAsset, interaction.inputValue)) {
                 return (true, nonce);
             }
+            nonce = pendingInteractions[nonce].nextNonce;
         }
+        
         return (false, 0);
     }
 
@@ -246,16 +253,7 @@ contract DepositBridge is IDefiBridge {
         // Get current cycle index
         uint256 currentCycleIndex = IManager(MANAGER).getCurrentCycleIndex();
 
-        // Check if need to request for withdraw first
-        if (inputValue > requestedWithdrawalAmount) {
-            return false;
-        }
-
-        //Check if the withdrawal request is complete
-        if (currentCycleIndex < minCycle) {
-            return false;
-        }
-        return true;
+        return (!(inputValue > requestedWithdrawalAmount || currentCycleIndex < minCycle));
     }
 
     function addWithdrawalNonce(
@@ -265,9 +263,12 @@ contract DepositBridge is IDefiBridge {
     ) private returns (uint256, bool) {
         Ttoken tToken = Ttoken(tAsset);
         tToken.requestWithdrawal(inputValue);
-
-        nonces.push(nonce);
-        pendingInteractions[nonce] = Interaction(inputValue, tAsset);
+        if(lastProcessedNonce == 0){
+            firstAddedNonce = nonce;
+        }
+        pendingInteractions[nonce] = Interaction(inputValue, tAsset, 0, lastAddedNonce);
+        pendingInteractions[lastAddedNonce].nextNonce = nonce;
+        lastAddedNonce = nonce;
         return (0, true);
     }
 
@@ -286,7 +287,7 @@ contract DepositBridge is IDefiBridge {
 
         //Get asset address from tAsset
         address asset = assets[tAsset];
-        IERC20 assetToken = IERC20(address(asset));
+        IERC20 assetToken = IERC20(asset);
 
         // Asset balance before withdrawal for calculating outputValue
         uint256 beforeBalance = assetToken.balanceOf(address(this));
@@ -302,17 +303,14 @@ contract DepositBridge is IDefiBridge {
         uint256 afterBalance = assetToken.balanceOf(address(this));
 
         outputValue = afterBalance - beforeBalance;
-
-        delete pendingInteractions[nonce];
-        for (uint256 i = 0; i < nonces.length; i++) {
-            if (nonces[i] == nonce) {
-                for (uint256 a = i; a < nonces.length - 1; a++) {
-                    nonces[a] = nonces[a + 1];
-                }
-                nonces.pop();
-                break;
-            }
+        uint256 previousNonce = pendingInteractions[nonce].previousNonce;
+        if(pendingInteractions[previousNonce].inputValue != 0){
+            pendingInteractions[previousNonce].nextNonce = pendingInteractions[nonce].nextNonce;
+        }else{
+            lastProcessedNonce = nonce;
         }
+        
+        delete pendingInteractions[nonce];
     }
 
     function deposit(

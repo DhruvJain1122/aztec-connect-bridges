@@ -9,25 +9,25 @@ import {RollupProcessor} from './../../aztec/RollupProcessor.sol';
 // Example-specific imports
 import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 import {IManager} from './interfaces/Manager.sol';
-import {DepositBridge} from './../../bridges/tokemak/DepositBridge.sol';
+import {TokemakBridge} from './../../bridges/tokemak/TokemakBridge.sol';
 
 import {AztecTypes} from './../../aztec/AztecTypes.sol';
 
 import '../../../lib/ds-test/src/test.sol';
 
-contract DepositBridgeTest is DSTest {
-    Vm vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
-    address public tWETH = 0xD3D13a578a53685B4ac36A1Bab31912D2B2A2F36;
-    address public WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
-    address public MANAGER = 0xA86e412109f77c45a3BC1c5870b880492Fb86A14;
-    address public DEPLOYER = 0x9e0bcE7ec474B481492610eB9dd5D69EB03718D5;
-    uint256 WETH_SLOT = 3;
+contract TokemakBridgeTest is DSTest {
+    Vm constant vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
+    address public constant tWETH = 0xD3D13a578a53685B4ac36A1Bab31912D2B2A2F36;
+    address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    address public constant MANAGER = 0xA86e412109f77c45a3BC1c5870b880492Fb86A14;
+    address public constant DEPLOYER = 0x9e0bcE7ec474B481492610eB9dd5D69EB03718D5;
+    uint256 constant WETH_SLOT = 3;
     DefiBridgeProxy defiBridgeProxy;
     RollupProcessor rollupProcessor;
     event TokenBalance(uint256 previousBalance, uint256 newBalance);
 
     uint256 nonce = 1;
-    DepositBridge bridge;
+    TokemakBridge bridge;
     AztecTypes.AztecAsset private empty;
 
     function _aztecPreSetup() internal {
@@ -38,16 +38,16 @@ contract DepositBridgeTest is DSTest {
     function setUp() public {
         _aztecPreSetup();
 
-        bridge = new DepositBridge(address(rollupProcessor));
+        bridge = new TokemakBridge(address(rollupProcessor));
 
         rollupProcessor.setBridgeGasLimit(address(bridge), 2000000);
     }
 
-    function testDepositBridge() public {
-        validateDepositBridge(1000, 500);
+    function testTokemakBridge() public {
+        validateTokemakBridge(1000, 500);
     }
 
-    function validateDepositBridge(uint256 balance, uint256 depositAmount) public {
+    function validateTokemakBridge(uint256 balance, uint256 depositAmount) public {
         _setTokenBalance(WETH, address(rollupProcessor), balance * 3, WETH_SLOT);
 
         //Deposit to Pool
@@ -157,15 +157,6 @@ contract DepositBridgeTest is DSTest {
         bool completed = rollupProcessor.processAsyncDefiInteraction(nonce);
         uint256 afterBalance = assetToken.balanceOf(address(rollupProcessor));
         emit TokenBalance(beforeBalance, afterBalance);
-    }
-
-    function assertNotEq(address a, address b) internal {
-        if (a == b) {
-            emit log('Error: a != b not satisfied [address]');
-            emit log_named_address('  Expected', b);
-            emit log_named_address('    Actual', a);
-            fail();
-        }
     }
 
     function _setTokenBalance(
