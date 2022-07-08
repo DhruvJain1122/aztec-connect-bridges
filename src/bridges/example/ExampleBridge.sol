@@ -1,58 +1,59 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// Copyright 2020 Spilsbury Holdings Ltd
-pragma solidity >=0.6.10 <=0.8.10;
-pragma experimental ABIEncoderV2;
+// Copyright 2022 Spilsbury Holdings Ltd
+pragma solidity >=0.8.4;
 
-import { SafeMath } from "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {AztecTypes} from "../../aztec/libraries/AztecTypes.sol";
+import {ErrorLib} from "../base/ErrorLib.sol";
+import {BridgeBase} from "../base/BridgeBase.sol";
 
-import { IDefiBridge } from "../../interfaces/IDefiBridge.sol";
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+/**
+ * @title An example bridge contract.
+ * @author Aztec Team
+ * @notice You can use this contract to immediately get back what you've deposited.
+ * @dev This bridge demonstrates the flow of assets in the convert function. This bridge simply returns what has been
+ *      sent to it.
+ */
+contract ExampleBridgeContract is BridgeBase {
+    /**
+     * @notice Set address of rollup processor
+     * @param _rollupProcessor Address of rollup processor
+     */
+    constructor(address _rollupProcessor) BridgeBase(_rollupProcessor) {}
 
-import { AztecTypes } from "../../aztec/AztecTypes.sol";
-
-contract ExampleBridgeContract is IDefiBridge {
-  using SafeMath for uint256;
-
-  address public immutable rollupProcessor;
-
-  constructor(address _rollupProcessor) public {
-    rollupProcessor = _rollupProcessor;
-  }
-
-  function convert(
-    AztecTypes.AztecAsset memory inputAssetA,
-    AztecTypes.AztecAsset memory inputAssetB,
-    AztecTypes.AztecAsset memory outputAssetA,
-    AztecTypes.AztecAsset memory outputAssetB,
-    uint256 totalInputValue,
-    uint256 interactionNonce,
-    uint64 auxData,
-    address rollupBeneficiary
-  )
-    external
-    payable
-    override
-    returns (
-      uint256 outputValueA,
-      uint256 outputValueB,
-      bool isAsync
+    /**
+     * @notice A function which returns an _inputValue amount of _inputAssetA
+     * @param _inputAssetA - Arbitrary ERC20 token
+     * @param _outputAssetA - Equal to _inputAssetA
+     * @return outputValueA - the amount of output asset to return
+     * @dev In this case _outputAssetA equals _inputAssetA
+     */
+    function convert(
+        AztecTypes.AztecAsset memory _inputAssetA,
+        AztecTypes.AztecAsset memory,
+        AztecTypes.AztecAsset memory _outputAssetA,
+        AztecTypes.AztecAsset memory,
+        uint256 _inputValue,
+        uint256,
+        uint64,
+        address
     )
-  {
-    // // ### INITIALIZATION AND SANITY CHECKS
-    require(msg.sender == rollupProcessor, "ExampleBridge: INVALID_CALLER");
-    outputValueA = totalInputValue;
-    IERC20(inputAssetA.erc20Address).approve(rollupProcessor, totalInputValue);
-  }
-
-
-  function finalise(
-    AztecTypes.AztecAsset calldata inputAssetA,
-    AztecTypes.AztecAsset calldata inputAssetB,
-    AztecTypes.AztecAsset calldata outputAssetA,
-    AztecTypes.AztecAsset calldata outputAssetB,
-    uint256 interactionNonce,
-    uint64 auxData
-  ) external payable override returns (uint256, uint256, bool) {
-    require(false);
-  }
+        external
+        payable
+        override(BridgeBase)
+        onlyRollup
+        returns (
+            uint256 outputValueA,
+            uint256,
+            bool
+        )
+    {
+        // Check the input asset is ERC20
+        if (_inputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert ErrorLib.InvalidInputA();
+        if (_outputAssetA.erc20Address != _inputAssetA.erc20Address) revert ErrorLib.InvalidOutputA();
+        // Return the input value of input asset
+        outputValueA = _inputValue;
+        // Approve rollup processor to take input value of input asset
+        IERC20(_outputAssetA.erc20Address).approve(ROLLUP_PROCESSOR, _inputValue);
+    }
 }

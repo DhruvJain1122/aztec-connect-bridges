@@ -3,27 +3,28 @@
 pragma solidity >=0.6.10 <=0.8.10;
 pragma experimental ABIEncoderV2;
 
-import {ERC20} from '@openzeppelin/contracts/token/ERC20/ERC20.sol';
-import {IVault, IAsset, PoolSpecialization} from './interfaces/IVault.sol';
-import {IPool} from './interfaces/IPool.sol';
-import {ITranche} from './interfaces/ITranche.sol';
-import {IDeploymentValidator} from './interfaces/IDeploymentValidator.sol';
-import {IERC20Permit, IERC20} from '../../interfaces/IERC20Permit.sol';
-import {IWrappedPosition} from './interfaces/IWrappedPosition.sol';
-import {IRollupProcessor} from '../../interfaces/IRollupProcessor.sol';
-import {MinHeap} from './MinHeap.sol';
-import {FullMath} from '../uniswapv3/libraries/FullMath.sol';
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {IVault, IAsset, PoolSpecialization} from "../../interfaces/element/IVault.sol";
+import {IPool} from "../../interfaces/element/IPool.sol";
+import {ITranche} from "../../interfaces/element/ITranche.sol";
+import {IDeploymentValidator} from "../../interfaces/element/IDeploymentValidator.sol";
+import {IERC20Permit, IERC20} from "../../interfaces/IERC20Permit.sol";
+import {IWrappedPosition} from "../../interfaces/element/IWrappedPosition.sol";
+import {IRollupProcessor} from "../../aztec/interfaces/IRollupProcessor.sol";
+import {MinHeap} from "./MinHeap.sol";
+import {FullMath} from "../../libraries/uniswapv3/FullMath.sol";
 
-import {IDefiBridge} from '../../interfaces/IDefiBridge.sol';
+import {BridgeBase} from "../base/BridgeBase.sol";
+import {ErrorLib} from "../base/ErrorLib.sol";
 
-import {AztecTypes} from '../../aztec/AztecTypes.sol';
+import {AztecTypes} from "../../aztec/libraries/AztecTypes.sol";
 
 /**
  * @title Element Bridge
  * @dev Smart contract responsible for depositing, managing and redeeming Defi interactions with the Element protocol
  */
 
-contract ElementBridge is IDefiBridge {
+contract ElementBridge is BridgeBase {
     using MinHeap for MinHeap.MinHeapData;
 
     /*----------------------------------------
@@ -32,14 +33,12 @@ contract ElementBridge is IDefiBridge {
     error INVALID_TRANCHE();
     error INVALID_WRAPPED_POSITION();
     error INVALID_POOL();
-    error INVALID_CALLER();
     error ASSET_IDS_NOT_EQUAL();
     error ASSET_NOT_ERC20();
     error INPUT_ASSETB_NOT_UNUSED();
     error OUTPUT_ASSETB_NOT_UNUSED();
     error INTERACTION_ALREADY_EXISTS();
     error POOL_NOT_FOUND();
-    error UNKNOWN_NONCE();
     error BRIDGE_NOT_READY();
     error ALREADY_FINALISED();
     error TRANCHE_POSITION_MISMATCH();
@@ -138,9 +137,6 @@ contract ElementBridge is IDefiBridge {
     // mapping containing the block number in which a tranche was configured
     mapping(address => uint256) private trancheDeploymentBlockNumbers;
 
-    // the aztec rollup processor contract
-    address public immutable rollupProcessor;
-
     // the balancer contract
     address private immutable balancerAddress;
 
@@ -184,8 +180,7 @@ contract ElementBridge is IDefiBridge {
         bytes32 _trancheBytecodeHash,
         address _balancerVaultAddress,
         address _elementDeploymentValidatorAddress
-    ) {
-        rollupProcessor = _rollupProcessor;
+    ) BridgeBase(_rollupProcessor) {
         trancheFactory = _trancheFactory;
         trancheBytecodeHash = _trancheBytecodeHash;
         balancerAddress = _balancerVaultAddress;
@@ -376,7 +371,7 @@ contract ElementBridge is IDefiBridge {
     function getTrancheDeploymentBlockNumber(uint256 interactionNonce) public view returns (uint256 blockNumber) {
         Interaction storage interaction = interactions[interactionNonce];
         if (interaction.expiry == 0) {
-            revert UNKNOWN_NONCE();
+            revert ErrorLib.InvalidNonce();
         }
         blockNumber = trancheDeploymentBlockNumbers[interaction.trancheAddress];
     }
@@ -439,7 +434,8 @@ contract ElementBridge is IDefiBridge {
     )
         external
         payable
-        override
+        override(BridgeBase)
+        onlyRollup
         returns (
             uint256 outputValueA,
             uint256 outputValueB,
@@ -448,10 +444,6 @@ contract ElementBridge is IDefiBridge {
     {
         int64 gasAtStart = int64(int256(gasleft()));
         int64 gasUsed = 0;
-        // ### INITIALIZATION AND SANITY CHECKS
-        if (msg.sender != rollupProcessor) {
-            revert INVALID_CALLER();
-        }
         if (inputAssetA.id != outputAssetA.id) {
             revert ASSET_IDS_NOT_EQUAL();
         }
@@ -538,7 +530,7 @@ contract ElementBridge is IDefiBridge {
             assetIn: IAsset(inputAsset), // the input asset for the swap
             assetOut: IAsset(pool.trancheAddress), // the tranche token address as the output asset
             amount: inputQuantity, // the total amount of input asset we wish to swap
-            userData: '0x00' // set to 0 as per the docs, this is unused in current balancer pools
+            userData: "0x00" // set to 0 as per the docs, this is unused in current balancer pools
         });
         IVault.FundManagement memory fundManagement = IVault.FundManagement({
             sender: address(this), // the bridge has already received the tokens from the rollup so it owns totalInputValue of inputAssetA
@@ -599,7 +591,7 @@ contract ElementBridge is IDefiBridge {
             }
             uint256 gasForFinalise = gasRemaining - ourGasFloor;
             // make the call to finalise the interaction with the gas limit
-            try IRollupProcessor(rollupProcessor).processAsyncDefiInteraction{gas: gasForFinalise}(nonce) returns (
+            try IRollupProcessor(ROLLUP_PROCESSOR).processAsyncDefiInteraction{gas: gasForFinalise}(nonce) returns (
                 bool interactionCompleted
             ) {
                 // no need to do anything here, we just need to know that the call didn't throw
@@ -624,7 +616,8 @@ contract ElementBridge is IDefiBridge {
     )
         external
         payable
-        override
+        override(BridgeBase)
+        onlyRollup
         returns (
             uint256 outputValueA,
             uint256 outputValueB,
@@ -633,13 +626,10 @@ contract ElementBridge is IDefiBridge {
     {
         int64 gasAtStart = int64(int256(gasleft()));
         int64 gasUsed = 0;
-        if (msg.sender != rollupProcessor) {
-            revert INVALID_CALLER();
-        }
         // retrieve the interaction and verify it's ready for finalising
         Interaction storage interaction = interactions[interactionNonce];
         if (interaction.expiry == 0) {
-            revert UNKNOWN_NONCE();
+            revert ErrorLib.InvalidNonce();
         }
         if (interaction.expiry >= block.timestamp) {
             revert BRIDGE_NOT_READY();
@@ -654,7 +644,7 @@ contract ElementBridge is IDefiBridge {
         uint256 trancheTokensHeld = trancheAccount.quantityTokensHeld;
         if (numDepositsIntoTranche == 0) {
             // shouldn't be possible, this means we have had no deposits against this tranche
-            setInteractionAsFailure(interaction, interactionNonce, 'NO_DEPOSITS_2', 0);
+            setInteractionAsFailure(interaction, interactionNonce, "NO_DEPOSITS_2", 0);
             popInteractionFromNonceMapping(interaction, interactionNonce);
             return (0, 0, false);
         }
@@ -680,7 +670,7 @@ contract ElementBridge is IDefiBridge {
                 unchecked {
                     gasUsed = gasAtStart - int64(int256(gasleft()));
                 }
-                setInteractionAsFailure(interaction, interactionNonce, 'WITHDRAW_ERR', gasUsed);
+                setInteractionAsFailure(interaction, interactionNonce, "WITHDRAW_ERR", gasUsed);
                 trancheAccount.redemptionStatus = TrancheRedemptionStatus.REDEMPTION_FAILED;
                 popInteractionFromNonceMapping(interaction, interactionNonce);
                 return (0, 0, false);
@@ -690,7 +680,7 @@ contract ElementBridge is IDefiBridge {
         // at this point, the tranche must have been redeemed and we can allocate proportionately to this interaction
         uint256 amountToAllocate = 0;
         if (trancheTokensHeld == 0) {
-            // what can we do here? 
+            // what can we do here?
             // we seem to have 0 total principle tokens so we can't apportion the output asset as it must be the case that each interaction purchased 0
             // we know that the number of deposits against this tranche is > 0 as we check further up this function
             // so we will have to divide the output asset, if there is any, equally
@@ -699,10 +689,15 @@ contract ElementBridge is IDefiBridge {
             // apportion the output asset based on the interaction's holding of the principle token
             // protects against phantom overflow in the operation of
             // amountToAllocate = (trancheAccount.quantityAssetRedeemed * interaction.quantityPT) / trancheTokensHeld;
-            amountToAllocate = FullMath.mulDiv(trancheAccount.quantityAssetRedeemed, interaction.quantityPT, trancheTokensHeld);
+            amountToAllocate = FullMath.mulDiv(
+                trancheAccount.quantityAssetRedeemed,
+                interaction.quantityPT,
+                trancheTokensHeld
+            );
         }
         // numDeposits and numFinalised are uint32 types, so easily within range for an int256
-        int256 numRemainingInteractionsForTranche = int256(uint256(numDepositsIntoTranche)) - int256(uint256(trancheAccount.numFinalised));
+        int256 numRemainingInteractionsForTranche = int256(uint256(numDepositsIntoTranche)) -
+            int256(uint256(trancheAccount.numFinalised));
         // the number of remaining interactions should never be less than 1 here, but test for <= 1 to ensure we catch all possibilities
         if (numRemainingInteractionsForTranche <= 1 || amountToAllocate > trancheAccount.quantityAssetRemaining) {
             // if there are no more interactions to finalise after this then allocate all the remaining
@@ -715,7 +710,7 @@ contract ElementBridge is IDefiBridge {
         }
 
         // approve the transfer of funds back to the rollup contract
-        ERC20(outputAssetA.erc20Address).approve(rollupProcessor, amountToAllocate);
+        ERC20(outputAssetA.erc20Address).approve(ROLLUP_PROCESSOR, amountToAllocate);
         interaction.finalised = true;
         popInteractionFromNonceMapping(interaction, interactionNonce);
         outputValueA = amountToAllocate;
@@ -724,7 +719,7 @@ contract ElementBridge is IDefiBridge {
         unchecked {
             gasUsed = gasAtStart - int64(int256(gasleft()));
         }
-        emit LogFinalise(interactionNonce, interactionCompleted, '', gasUsed);
+        emit LogFinalise(interactionNonce, interactionCompleted, "", gasUsed);
     }
 
     /**
@@ -894,20 +889,20 @@ contract ElementBridge is IDefiBridge {
         TrancheAccount storage trancheAccount = trancheAccounts[interaction.trancheAddress];
         if (trancheAccount.numDeposits == 0) {
             // shouldn't happen, suggests we don't have an account for this tranche!
-            return (false, 'NO_DEPOSITS_1');
+            return (false, "NO_DEPOSITS_1");
         }
         if (trancheAccount.redemptionStatus == TrancheRedemptionStatus.REDEMPTION_FAILED) {
-            return (false, 'REDEMPTION_FAILED');
+            return (false, "REDEMPTION_FAILED");
         }
         // determine if the tranche has already been redeemed
         if (trancheAccount.redemptionStatus == TrancheRedemptionStatus.REDEMPTION_SUCCEEDED) {
             // tranche was previously redeemed
             if (trancheAccount.quantityAssetRemaining == 0) {
                 // this is a problem. we have already allocated out all of the redeemed assets!
-                return (false, 'FULLY_ALLOCATED');
+                return (false, "FULLY_ALLOCATED");
             }
             // this interaction can be finalised. we don't need to redeem the tranche, we just need to allocate the redeemed asset
-            return (true, '');
+            return (true, "");
         }
         // tranche hasn't been redeemed, now check to see if we can redeem it
         ITranche tranche = ITranche(interaction.trancheAddress);
@@ -917,7 +912,7 @@ contract ElementBridge is IDefiBridge {
             if (newExpiry > block.timestamp) {
                 // a speedbump is in force for this tranche and it is beyond the current time
                 trancheAccount.redemptionStatus = TrancheRedemptionStatus.REDEMPTION_FAILED;
-                return (false, 'SPEEDBUMP');
+                return (false, "SPEEDBUMP");
             }
         }
         address wpAddress = address(tranche.position());
@@ -927,9 +922,9 @@ contract ElementBridge is IDefiBridge {
         uint256 vaultQuantity = ERC20(underlyingAddress).balanceOf(yearnVaultAddress);
         if (trancheAccount.quantityTokensHeld > vaultQuantity) {
             trancheAccount.redemptionStatus = TrancheRedemptionStatus.REDEMPTION_FAILED;
-            return (false, 'VAULT_BALANCE');
+            return (false, "VAULT_BALANCE");
         }
         // at this point, we will need to redeem the tranche which should be possible
-        return (true, '');
+        return (true, "");
     }
 }

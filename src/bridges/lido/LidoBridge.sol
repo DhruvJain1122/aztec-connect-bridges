@@ -1,157 +1,142 @@
 // SPDX-License-Identifier: GPLv2
+pragma solidity >=0.8.4;
 
-pragma solidity >=0.6.10 <=0.8.10;
-pragma experimental ABIEncoderV2;
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ICurvePool} from "../../interfaces/curve/ICurvePool.sol";
+import {ILido} from "../../interfaces/lido/ILido.sol";
+import {IWstETH} from "../../interfaces/lido/IWstETH.sol";
+import {IRollupProcessor} from "../../aztec/interfaces/IRollupProcessor.sol";
+
+import {BridgeBase} from "../base/BridgeBase.sol";
+import {ErrorLib} from "../base/ErrorLib.sol";
+import {AztecTypes} from "../../aztec/libraries/AztecTypes.sol";
 
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IDefiBridge} from "../../interfaces/IDefiBridge.sol";
-import {AztecTypes} from "../../aztec/AztecTypes.sol";
 
-interface ICurvePool {
-    function get_dy(
-        int128 i,
-        int128 j,
-        uint256 dx
-    ) external view returns (uint256);
+contract LidoBridge is BridgeBase {
+    using SafeERC20 for ILido;
+    using SafeERC20 for IWstETH;
 
-    function exchange(
-        int128 i,
-        int128 j,
-        uint256 dx,
-        uint256 min_dy
-    ) external payable returns (uint256);
-}
+    error InvalidConfiguration();
+    error InvalidWrapReturnValue();
+    error InvalidUnwrapReturnValue();
 
-interface ILido {
-    function submit(address _referral) external payable returns (uint256);
-}
+    address public immutable REFERRAL;
 
-interface ILidoOracle {
-    function getLastCompletedReportDelta() external view returns (uint256 postTotalPooledEther, uint256 preTotalPooledEther, uint256 timeElapsed);
-}
+    ILido public constant LIDO = ILido(0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84);
+    IWstETH public constant WRAPPED_STETH = IWstETH(0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0);
+    ICurvePool public constant CURVE_POOL = ICurvePool(0xDC24316b9AE028F1497c275EB9192a3Ea0f67022);
 
-interface IWstETH {
-    function wrap(uint256 _stETHAmount) external returns (uint256);
-    function unwrap(uint256 _wstETHAmount) external returns (uint256);
-    function getStETHByWstETH(uint256 _wstETHAmount) external view returns (uint256);
-    function getWstETHByStETH(uint256 _stETHAmount) external view returns (uint256);
-}
+    int128 private constant CURVE_ETH_INDEX = 0;
+    int128 private constant CURVE_STETH_INDEX = 1;
 
-interface IRollupProcessor {
-    function receiveEthFromBridge(uint256 interactionNonce) external payable;
-}
+    // The amount of dust to leave in the contract
+    uint256 private constant DUST = 1;
 
-contract LidoBridge is IDefiBridge {
-    using SafeERC20 for IERC20;
+    constructor(address _rollupProcessor, address _referral) BridgeBase(_rollupProcessor) {
+        if (CURVE_POOL.coins(uint256(uint128(CURVE_STETH_INDEX))) != address(LIDO)) {
+            revert InvalidConfiguration();
+        }
 
-    address public immutable rollupProcessor;
-    address public referral;
+        REFERRAL = _referral;
 
-    ILido public lido = ILido(0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84);
-    IWstETH public wrappedStETH = IWstETH(0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0);
-    ICurvePool public curvePool = ICurvePool(0xDC24316b9AE028F1497c275EB9192a3Ea0f67022);
-
-    int128 private curveETHIndex = 0;
-    int128 private curveStETHIndex = 1;
-
-    constructor(address _rollupProcessor, address _referral) {
-        rollupProcessor = _rollupProcessor;
-        referral = _referral;
+        // As the contract is not supposed to hold any funds, we can pre-approve
+        LIDO.safeIncreaseAllowance(address(WRAPPED_STETH), type(uint256).max);
+        LIDO.safeIncreaseAllowance(address(CURVE_POOL), type(uint256).max);
+        WRAPPED_STETH.safeIncreaseAllowance(ROLLUP_PROCESSOR, type(uint256).max);
     }
 
     receive() external payable {}
 
     function convert(
-        AztecTypes.AztecAsset calldata inputAssetA,
+        AztecTypes.AztecAsset calldata _inputAssetA,
         AztecTypes.AztecAsset calldata,
-        AztecTypes.AztecAsset calldata outputAssetA,
+        AztecTypes.AztecAsset calldata _outputAssetA,
         AztecTypes.AztecAsset calldata,
-        uint256 inputValue,
-        uint256 interactionNonce,
+        uint256 _inputValue,
+        uint256 _interactionNonce,
         uint64,
         address
     )
         external
         payable
+        override(BridgeBase)
+        onlyRollup
         returns (
             uint256 outputValueA,
             uint256,
             bool isAsync
         )
     {
-        require(msg.sender == rollupProcessor, "LidoBridge: Invalid Caller");
+        bool isETHInput = _inputAssetA.assetType == AztecTypes.AztecAssetType.ETH;
+        bool isWstETHInput = _inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20 &&
+            _inputAssetA.erc20Address == address(WRAPPED_STETH);
 
-        bool isETHInput = inputAssetA.assetType == AztecTypes.AztecAssetType.ETH;
-        bool isWstETHInput = inputAssetA.assetType == AztecTypes.AztecAssetType.ERC20 && inputAssetA.erc20Address == address(wrappedStETH);
-
-        require(isETHInput || isWstETHInput, "LidoBridge: Invalid Input");
+        if (!(isETHInput || isWstETHInput)) {
+            revert ErrorLib.InvalidInputA();
+        }
 
         isAsync = false;
-        outputValueA = isETHInput ? wrapETH(inputValue, outputAssetA) : unwrapETH(inputValue, outputAssetA, interactionNonce);
+        outputValueA = isETHInput
+            ? _wrapETH(_inputValue, _outputAssetA)
+            : _unwrapETH(_inputValue, _outputAssetA, _interactionNonce);
     }
 
     /**
         Convert ETH -> wstETH
      */
-    function wrapETH(uint256 inputValue, AztecTypes.AztecAsset calldata outputAsset) private returns (uint256 outputValue) {
-        require(
-            outputAsset.assetType == AztecTypes.AztecAssetType.ERC20 && outputAsset.erc20Address == address(wrappedStETH),
-            "LidoBridge: Invalid Output Token"
-        );
-
-        // the minimum should be 1ETH:1STETH
-        uint256 minOutput = inputValue;
-
-        // Check with curve to see if we can get better exchange rate than 1 ETH : 1 STETH
-        // Yes: use curve
-        // No: deposit to Lido correct
-
-        uint256 curveStETHBalance = curvePool.get_dy(curveETHIndex, curveStETHIndex, inputValue);
-
-        if (curveStETHBalance > minOutput) {
-            // exchange via curve since we can get a better rate
-            curvePool.exchange{value: inputValue}(curveETHIndex, curveStETHIndex, inputValue, minOutput);
-        } else {
-            // deposit directly through lido since we cannot get better rate
-            lido.submit{value: inputValue}(referral);
+    function _wrapETH(uint256 _inputValue, AztecTypes.AztecAsset calldata _outputAsset)
+        private
+        returns (uint256 outputValue)
+    {
+        if (
+            _outputAsset.assetType != AztecTypes.AztecAssetType.ERC20 ||
+            _outputAsset.erc20Address != address(WRAPPED_STETH)
+        ) {
+            revert ErrorLib.InvalidOutputA();
         }
 
-        // since stETH is a rebase token, lets wrap it to wstETH before sending it back to the rollupProcessor
-        uint256 outputStETHBalance = IERC20(address(lido)).balanceOf(address(this));
+        // deposit into lido (return value is shares NOT stETH)
+        LIDO.submit{value: _inputValue}(REFERRAL);
 
-        IERC20(address(lido)).safeIncreaseAllowance(address(wrappedStETH), outputStETHBalance);
-        outputValue = wrappedStETH.wrap(outputStETHBalance);
+        // Leave `DUST` in the stEth balance to save gas on future runs
+        uint256 outputStETHBalance = LIDO.balanceOf(address(this)) - DUST;
 
-        // Give allowance for rollup processor to withdraw
-        IERC20(address(wrappedStETH)).safeIncreaseAllowance(rollupProcessor, outputValue);
+        // Lido balance can be <=2 wei off, 1 from the submit where our shares is computed rounding down,
+        // and then again when the balance is computed from the shares, rounding down again.
+        if (outputStETHBalance + 2 + DUST < _inputValue) {
+            revert InvalidWrapReturnValue();
+        }
+
+        // since stETH is a rebase token, lets wrap it to wstETH before sending it back to the rollupProcessor.
+        // Again, leave `DUST` in the wstEth balance to save gas on future runs
+        outputValue = WRAPPED_STETH.wrap(outputStETHBalance) - DUST;
     }
 
     /**
         Convert wstETH to ETH
      */
-    function unwrapETH(uint256 inputValue, AztecTypes.AztecAsset calldata outputAsset, uint256 interactionNonce) private returns (uint256 outputValue) {
-        require(outputAsset.assetType == AztecTypes.AztecAssetType.ETH, "LidoBridge: Invalid Output Token");
+    function _unwrapETH(
+        uint256 _inputValue,
+        AztecTypes.AztecAsset calldata _outputAsset,
+        uint256 _interactionNonce
+    ) private returns (uint256 outputValue) {
+        if (_outputAsset.assetType != AztecTypes.AztecAssetType.ETH) {
+            revert ErrorLib.InvalidOutputA();
+        }
 
         // Convert wstETH to stETH so we can exchange it on curve
-        uint256 stETH = wrappedStETH.unwrap(inputValue);
+        uint256 stETH = WRAPPED_STETH.unwrap(_inputValue);
 
         // Exchange stETH to ETH via curve
-        IERC20(address(lido)).safeIncreaseAllowance(address(curvePool), stETH);
-        outputValue = curvePool.exchange(curveStETHIndex, curveETHIndex, stETH, 0);
+        uint256 dy = CURVE_POOL.exchange(CURVE_STETH_INDEX, CURVE_ETH_INDEX, stETH, 0);
+
+        outputValue = address(this).balance;
+        if (outputValue < dy) {
+            revert InvalidUnwrapReturnValue();
+        }
 
         // Send ETH to rollup processor
-        IRollupProcessor(rollupProcessor).receiveEthFromBridge{value: outputValue}(interactionNonce);
+        IRollupProcessor(ROLLUP_PROCESSOR).receiveEthFromBridge{value: outputValue}(_interactionNonce);
     }
-
-  function finalise(
-    AztecTypes.AztecAsset calldata,
-    AztecTypes.AztecAsset calldata,
-    AztecTypes.AztecAsset calldata,
-    AztecTypes.AztecAsset calldata,
-    uint256,
-    uint64
-  ) external payable returns (uint256, uint256, bool) {
-    require(false);
-  }
 }

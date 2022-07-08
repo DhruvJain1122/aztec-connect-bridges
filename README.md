@@ -1,12 +1,13 @@
+# Aztec Connect Bridges
+
 [![CircleCI](https://circleci.com/gh/AztecProtocol/aztec-connect-bridges/tree/master.svg?style=shield)](https://circleci.com/gh/AztecProtocol/aztec-connect-bridges/tree/master)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](code_of_conduct.md)
 
-# Uniswap V3 Bridge for Liquidity Provision
-
-# How to contribute
+## How to contribute
 
 This repo has been built with Foundry. Given the inter-connected nature of Aztec Connect Bridges with existing mainnet protocols, we decided Foundry / forge offered the best support for testing. This repo should make debugging, mainnet-forking, impersonation and gas profiling simple. It makes sense to test Solidity contracts with Solidty not with the added complication of Ethers / Typescript.
 
-# Writing a bridge
+## Writing a bridge
 
 Developing a bridge is simple and permissionless. It is done entirely in Solidity and without any knowledge of the underlying cryptography Aztec uses. Users of your bridge will get the full benefits of ironclad privacy and 10-30x gas savings. Simply follow the steps below to get started.
 
@@ -17,6 +18,15 @@ Developing a bridge is simple and permissionless. It is done entirely in Solidit
 5. Write an explanation of the flows your bridge supports to be included as `spec.md`.
 6. Implement the Typescript `bridge-data.ts` class that tells a frontend developer how to use your bridge.
 7. Deploy your bridge! Instructions coming soon.
+
+## Deployed Bridge Info
+
+| Bridge                                                                                      | Id  | InputAssetA (AssetId)                                                                             | InputAssetB (AssetId) | OutputAssetA (AssetId)                                     | OutputAssetB (AssetId) | auxData                                       | async | Description                                                                                                   |
+| ------------------------------------------------------------------------------------------- | --- | ------------------------------------------------------------------------------------------------- | --------------------- | ---------------------------------------------------------- | ---------------------- | --------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------- |
+| [Element](https://etherscan.io/address/0xaeD181779A8AAbD8Ce996949853FEA442C2CDB47)          | 1   | DAI (1)                                                                                           | Not used              | DAI (1)                                                    | Not used               | The tranche expiry value for the interaction. | Yes   | Smart contract responsible for depositing, managing and redeeming Defi interactions with the Element protocol |
+| [LidoBridge](https://etherscan.io/address/0x381abF150B53cc699f0dBBBEF3C5c0D1fA4B3Efd)       | 2   | ETH (0) or wstETH (2)                                                                             | Not used              | wstETH (2) or ETH (0)                                      | Not used               | Not used                                      | No    | Deposit Eth and get wstETH from Lido, or deposit wstETH and get ETH from a Curve swap.                        |
+| [AceOfZkBridge](https://etherscan.io/address/0x0eb7F9464060289fE4FDDFDe2258f518c6347a70)    | 4   | [Ace of ZK NFT](https://opensea.io/assets/ethereum/0xe56b526e532804054411a470c49715c531cfd485/16) | Not used              | Not used                                                   | Not used               |                                               | No    | A bridge to send the Ace of ZK to the rollup processor contract.                                              |
+| [CurveStEthBridge](https://etherscan.io/address/0x0031130c56162e00A7e9C01eE4147b11cbac8776) | 5   | ETH (0) or wstETH (2)                                                                             | Not used              | wsthETH (2) or ETH (0) - will be opposite of `inputAssetA` | Not used               | Not used                                      | No    | A DeFiBridge for trading between Eth and wstEth using curve and the stEth wrapper.                            |
 
 ## Getting started
 
@@ -46,39 +56,42 @@ src/client/example
 To test run:
 
 ```
-yarn test --match YourBridge
+yarn test --match-contract YourBridge
 ```
 
 To get a gas report run:
 
 ```
-yarn test --match YourBridge --gas-report
+yarn test --match-contract YourBridge --gas-report
 ```
 
 To debug:
 
 ```
-yarn test --match YourBridge -vvvv
+yarn test --match-contract YourBridge -vvvv
 ```
 
 ## Testing methodolgy
 
 This repo includes an Infura key that allows forking from mainnet. We have included some helpers to make testing easier.
 
-In production a bridge is called by a user creating a client side proof via the Aztec SDK. These transaction proofs are sent to a rollup provider for aggregation. The rollup provider then sends the aggregate rollup proof with the sum of all users proofs for a given `bridgeId` to your bridge contract.
+In production a bridge is called by a user creating a client side proof via the Aztec SDK. These transaction proofs are sent to a rollup provider for aggregation. The rollup provider then sends the aggregate rollup proof with the sum of all users' proofs for a given `bridgeId` to your bridge contract.
 
 A `bridgeId` consists of the below schema. The rollup contract uses this to construct the function parameters to pass into your bridge contract. It calls your bridge with a fixed amount of gas via a `delegateCall` via the `DefiBridgeProxy.sol` contract.
 
 To test a bridge, we have added a `MockRollupProcessor` that simulates a rollup. You can call this in your tests by simply calling `rollupContract.convert()` with the deconstructed `bridgeId` fields.
 
-In production, the rollup contract will supply `totalInputValue` as the aggregate sum of the input assets, and `interactionNonce` as a globally unique ID. For testing you can provide this.
+In production, the rollup contract will supply `inputValue` of both input assets and use the `interactionNonce` as a globally unique ID. For testing you may provide this value.
 
-The rollup contract will send `totalInputValue` of `inputAssetA` and `inputAssetB` ahead of the call to convert. In production, the rollup contract has these tokens as they are the users funds. For testing there is a helper to prefund the rollup with sufficient tokens to enable the transfer.
+The rollup contract will send `inputValue` of `inputAssetA` and `inputAssetB` ahead of the call to convert.
+In production, the rollup contract has these tokens as they are the users' funds.
+For testing use the `deal` method from the [forge-std](https://github.com/foundry-rs/forge-std)'s `Test` class (see [Example.t.sol](https://github.com/AztecProtocol/aztec-connect-bridges/blob/master/src/test/example/Example.t.sol) for details).
+This method prefunds the rollup with sufficient tokens to enable the transfer.
 
-Simply call:
+After extending the `Test` class simply call:
 
 ```solidity
-  _setTokenBalance(address(dai), address(rollupProcessor), depositAmount);
+  deal(address(dai), address(rollupProcessor), amount);
 ```
 
 This will set the balance of the rollup to the amount required.
@@ -131,7 +144,9 @@ AsyncYieldBridgeData
 
 You should pick the class that describes the functionality of your bridge and implement the functions to fetch data from your bridge / L1.
 
-# Aztec Connect Background
+## Aztec Connect Background
+
+You can also find more information on the [Aztec docs site](https://docs.aztec.network).
 
 ### What is Aztec?
 
@@ -256,7 +271,14 @@ interface IDefiBridge {
     Types.AztecAsset calldata outputAssetB,
     uint256 interactionNonce,
     uint64 auxData
-  ) external payable returns (uint256 outputValueA, uint256 outputValueB, bool interactionComplete);
+  )
+    external
+    payable
+    returns (
+      uint256 outputValueA,
+      uint256 outputValueB,
+      bool interactionComplete
+    );
 }
 
 ```
@@ -280,3 +302,5 @@ At a later date, this interaction can be finalised by prodding the rollup contra
 #### finalise()
 
 This function will be called from the Azte Rollup contract. The Aztec Rollup contract will check that it received the correct amount of ETH and tokens specified by the return values and trigger the settlement step on Aztec.
+
+Please reach out on Discord with any questions. You can join our Discord [here](https://discord.gg/ctGpCgkBFt).
