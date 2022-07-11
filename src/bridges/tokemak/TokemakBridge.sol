@@ -4,11 +4,11 @@ pragma solidity >=0.8.4;
 
 import {SafeERC20} from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
 
-import {IDefiBridge} from '../../interfaces/IDefiBridge.sol';
+import {IDefiBridge} from '../../aztec/interfaces/IDefiBridge.sol';
 import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
-import {IRollupProcessor} from '../../interfaces/IRollupProcessor.sol';
+import {IRollupProcessor} from '../../aztec/interfaces/IRollupProcessor.sol';
 
-import {AztecTypes} from '../../aztec/AztecTypes.sol';
+import {AztecTypes} from '../../aztec/libraries/AztecTypes.sol';
 
 interface Ttoken is IERC20 {
     function requestedWithdrawals(address account) external view returns (uint256, uint256);

@@ -11,7 +11,7 @@ import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
 import {IManager} from './interfaces/Manager.sol';
 import {TokemakBridge} from './../../bridges/tokemak/TokemakBridge.sol';
 
-import {AztecTypes} from './../../aztec/AztecTypes.sol';
+import {AztecTypes} from './../../aztec/libraries/AztecTypes.sol';
 
 import '../../../lib/ds-test/src/test.sol';
 
