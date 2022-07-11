@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.10;
 
-import {Vm} from '../../../lib/forge-std/src/Vm.sol';
+import {Vm} from "../../../lib/forge-std/src/Vm.sol";
 
-import {DefiBridgeProxy} from './../../aztec/DefiBridgeProxy.sol';
-import {RollupProcessor} from './../../aztec/RollupProcessor.sol';
+import {DefiBridgeProxy} from "./../../aztec/DefiBridgeProxy.sol";
+import {RollupProcessor} from "./../../aztec/RollupProcessor.sol";
 
 // Example-specific imports
-import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
-import {IManager} from './interfaces/Manager.sol';
-import {TokemakBridge} from './../../bridges/tokemak/TokemakBridge.sol';
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IManager} from "./interfaces/Manager.sol";
+import {TokemakBridge} from "./../../bridges/tokemak/TokemakBridge.sol";
 
-import {AztecTypes} from './../../aztec/libraries/AztecTypes.sol';
+import {AztecTypes} from "./../../aztec/libraries/AztecTypes.sol";
 
-import '../../../lib/ds-test/src/test.sol';
+import "../../../lib/ds-test/src/test.sol";
 
 contract TokemakBridgeTest is DSTest {
     Vm constant vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
@@ -62,8 +62,8 @@ contract TokemakBridgeTest is DSTest {
         uint256 newTimestamp = 1748641030;
         vm.warp(newTimestamp);
         vm.startPrank(DEPLOYER);
-        IManager(MANAGER).completeRollover('complete');
-        IManager(MANAGER).completeRollover('complete2');
+        IManager(MANAGER).completeRollover("complete");
+        IManager(MANAGER).completeRollover("complete2");
         vm.stopPrank();
 
         //Test if automatic process withdrawal working
@@ -77,8 +77,8 @@ contract TokemakBridgeTest is DSTest {
         newTimestamp = 1758641030;
         vm.warp(newTimestamp);
         vm.startPrank(DEPLOYER);
-        IManager(MANAGER).completeRollover('complete3');
-        IManager(MANAGER).completeRollover('complete4');
+        IManager(MANAGER).completeRollover("complete3");
+        IManager(MANAGER).completeRollover("complete4");
         vm.stopPrank();
 
         //Withdraw
@@ -167,6 +167,6 @@ contract TokemakBridgeTest is DSTest {
     ) internal {
         vm.store(token, keccak256(abi.encode(user, slot)), bytes32(uint256(balance)));
 
-        assertEq(IERC20(token).balanceOf(user), balance, 'wrong balance');
+        assertEq(IERC20(token).balanceOf(user), balance, "wrong balance");
     }
 }

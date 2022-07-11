@@ -2,13 +2,13 @@
 // Copyright 2020 Spilsbury Holdings Ltd
 pragma solidity >=0.8.4;
 
-import {SafeERC20} from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-import {IDefiBridge} from '../../aztec/interfaces/IDefiBridge.sol';
-import {IERC20} from '@openzeppelin/contracts/token/ERC20/IERC20.sol';
-import {IRollupProcessor} from '../../aztec/interfaces/IRollupProcessor.sol';
+import {IDefiBridge} from "../../aztec/interfaces/IDefiBridge.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IRollupProcessor} from "../../aztec/interfaces/IRollupProcessor.sol";
 
-import {AztecTypes} from '../../aztec/libraries/AztecTypes.sol';
+import {AztecTypes} from "../../aztec/libraries/AztecTypes.sol";
 
 interface Ttoken is IERC20 {
     function requestedWithdrawals(address account) external view returns (uint256, uint256);
@@ -217,7 +217,7 @@ contract TokemakBridge is IDefiBridge {
     function checkForNextInteractionToFinalise(uint256 gasFloor) internal returns (bool, uint256) {
         // do we have any expiries and if so is the earliest expiry now expired
         uint256 nonce = lastProcessedNonce;
-        if(nonce == 0 && firstAddedNonce != 0){
+        if (nonce == 0 && firstAddedNonce != 0) {
             Interaction storage interaction = pendingInteractions[firstAddedNonce];
             if (interaction.inputValue != 0 && canWithdraw(interaction.tAsset, interaction.inputValue)) {
                 return (true, firstAddedNonce);
@@ -225,12 +225,12 @@ contract TokemakBridge is IDefiBridge {
             nonce = firstAddedNonce;
         }
 
-        if (pendingInteractions[nonce].nextNonce == 0 ) {
+        if (pendingInteractions[nonce].nextNonce == 0) {
             return (false, 0);
         }
 
         uint256 minGasForLoop = gasFloor + MIN_GAS_FOR_CHECK_AND_FINALISE;
-        while (pendingInteractions[nonce].nextNonce != 0 && gasleft() >= minGasForLoop){
+        while (pendingInteractions[nonce].nextNonce != 0 && gasleft() >= minGasForLoop) {
             Interaction storage interaction = pendingInteractions[nonce];
             if (interaction.inputValue == 0) {
                 continue;
@@ -240,7 +240,7 @@ contract TokemakBridge is IDefiBridge {
             }
             nonce = pendingInteractions[nonce].nextNonce;
         }
-        
+
         return (false, 0);
     }
 
@@ -263,7 +263,7 @@ contract TokemakBridge is IDefiBridge {
     ) private returns (uint256, bool) {
         Ttoken tToken = Ttoken(tAsset);
         tToken.requestWithdrawal(inputValue);
-        if(lastProcessedNonce == 0){
+        if (lastProcessedNonce == 0) {
             firstAddedNonce = nonce;
         }
         pendingInteractions[nonce] = Interaction(inputValue, tAsset, 0, lastAddedNonce);
@@ -304,12 +304,12 @@ contract TokemakBridge is IDefiBridge {
 
         outputValue = afterBalance - beforeBalance;
         uint256 previousNonce = pendingInteractions[nonce].previousNonce;
-        if(pendingInteractions[previousNonce].inputValue != 0){
+        if (pendingInteractions[previousNonce].inputValue != 0) {
             pendingInteractions[previousNonce].nextNonce = pendingInteractions[nonce].nextNonce;
-        }else{
+        } else {
             lastProcessedNonce = nonce;
         }
-        
+
         delete pendingInteractions[nonce];
     }
 
