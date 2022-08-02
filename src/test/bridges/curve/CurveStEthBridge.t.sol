@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2022 Aztec.
 pragma solidity >=0.8.4;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -27,6 +28,7 @@ contract CurveStEthBridgeTest is BridgeTestBase {
 
     function setUp() public {
         bridge = new CurveStEthBridge(address(ROLLUP_PROCESSOR));
+
         vm.deal(address(bridge), 0);
         vm.prank(MULTI_SIG);
         ROLLUP_PROCESSOR.setSupportedBridge(address(bridge), 175000);
@@ -40,6 +42,10 @@ contract CurveStEthBridgeTest is BridgeTestBase {
         deal(address(WRAPPED_STETH), address(bridge), 1);
         LIDO.submit{value: 10}(address(0));
         LIDO.transfer(address(bridge), 10);
+
+        vm.label(address(bridge.LIDO()), "LIDO");
+        vm.label(address(bridge.WRAPPED_STETH()), "WRAPPED_STETH");
+        vm.label(address(bridge.CURVE_POOL()), "CURVE_POOL");
     }
 
     function testErrorCodes() public {
@@ -102,6 +108,30 @@ contract CurveStEthBridgeTest is BridgeTestBase {
         validateUnwrap(WRAPPED_STETH.balanceOf(address(ROLLUP_PROCESSOR)) / 2);
     }
 
+    function testMinPriceTooBigWrap() public {
+        uint256 depositAmount = 1e18;
+        vm.deal(address(bridge), depositAmount);
+
+        uint256 expectedPrice = CURVE_POOL.get_dy(0, 1, depositAmount);
+        uint64 minPrice = uint64((expectedPrice * 101) / 100); // Min price is 1% larger than what we should receive
+
+        vm.prank(address(ROLLUP_PROCESSOR));
+        vm.expectRevert("Exchange resulted in fewer coins than expected");
+        bridge.convert(ethAsset, emptyAsset, wstETHAsset, emptyAsset, depositAmount, 0, minPrice, address(0));
+    }
+
+    function testMinPriceTooBigUnwrap() public {
+        uint256 depositAmount = 1e18;
+        deal(address(WRAPPED_STETH), address(bridge), depositAmount);
+
+        uint256 expectedPrice = CURVE_POOL.get_dy(1, 0, depositAmount);
+        uint64 minPrice = uint64((expectedPrice * 101) / 100); // Min price is 1% larger than what we should receive
+
+        vm.prank(address(ROLLUP_PROCESSOR));
+        vm.expectRevert("Exchange resulted in fewer coins than expected");
+        bridge.convert(wstETHAsset, emptyAsset, ethAsset, emptyAsset, depositAmount, 0, minPrice, address(0));
+    }
+
     /**
         Testing flow:
         1. Send ETH to bridge
@@ -111,7 +141,6 @@ contract CurveStEthBridgeTest is BridgeTestBase {
      */
     function validateCurveBridge(uint256 _balance, uint256 _depositAmount) public {
         // Send ETH to bridge
-
         vm.deal(address(ROLLUP_PROCESSOR), _balance);
 
         // Convert ETH to wstETH
@@ -125,12 +154,15 @@ contract CurveStEthBridgeTest is BridgeTestBase {
         uint256 beforeETHBalance = address(ROLLUP_PROCESSOR).balance;
         uint256 beforeWstETHBalance = WRAPPED_STETH.balanceOf(address(ROLLUP_PROCESSOR));
 
+        uint256 expectedStEth = CURVE_POOL.get_dy(0, 1, _depositAmount);
+        uint64 minPrice = uint64((expectedStEth * bridge.PRECISION()) / _depositAmount);
+
         uint256 wstEthIncrease = _computeEthToWST(_depositAmount);
 
-        uint256 bridgeId = encodeBridgeId(id, ethAsset, emptyAsset, wstETHAsset, emptyAsset, 0);
+        uint256 bridgeCallData = encodeBridgeCallData(id, ethAsset, emptyAsset, wstETHAsset, emptyAsset, minPrice);
         vm.expectEmit(true, true, false, true);
-        emit DefiBridgeProcessed(bridgeId, getNextNonce(), _depositAmount, wstEthIncrease, 0, true, "");
-        sendDefiRollup(bridgeId, _depositAmount);
+        emit DefiBridgeProcessed(bridgeCallData, getNextNonce(), _depositAmount, wstEthIncrease, 0, true, "");
+        sendDefiRollup(bridgeCallData, _depositAmount);
 
         assertEq(address(ROLLUP_PROCESSOR).balance, beforeETHBalance - _depositAmount, "ETH balance not matching");
         assertEq(
@@ -146,14 +178,17 @@ contract CurveStEthBridgeTest is BridgeTestBase {
         uint256 beforeETHBalance = address(ROLLUP_PROCESSOR).balance;
         uint256 beforeWstEthBalance = WRAPPED_STETH.balanceOf(address(ROLLUP_PROCESSOR));
 
+        uint256 unwrappedStStEth = LIDO.getPooledEthByShares(_depositAmount);
+        uint64 minPrice = uint64((CURVE_POOL.get_dy(1, 0, unwrappedStStEth) * bridge.PRECISION()) / unwrappedStStEth);
+
         uint256 expectedEth = _computeWSTHToEth(_depositAmount);
 
-        uint256 bridgeId = encodeBridgeId(id, wstETHAsset, emptyAsset, ethAsset, emptyAsset, 0);
+        uint256 bridgeCallData = encodeBridgeCallData(id, wstETHAsset, emptyAsset, ethAsset, emptyAsset, minPrice);
         vm.expectEmit(true, true, false, true);
-        emit DefiBridgeProcessed(bridgeId, getNextNonce(), _depositAmount, expectedEth, 0, true, "");
-        sendDefiRollup(bridgeId, _depositAmount);
+        emit DefiBridgeProcessed(bridgeCallData, getNextNonce(), _depositAmount, expectedEth, 0, true, "");
+        sendDefiRollup(bridgeCallData, _depositAmount);
 
-        assertEq(address(ROLLUP_PROCESSOR).balance, beforeETHBalance + expectedEth, "ETH balance not maching");
+        assertEq(address(ROLLUP_PROCESSOR).balance, beforeETHBalance + expectedEth, "ETH balance not matching");
         assertEq(
             WRAPPED_STETH.balanceOf(address(ROLLUP_PROCESSOR)),
             beforeWstEthBalance - _depositAmount,
