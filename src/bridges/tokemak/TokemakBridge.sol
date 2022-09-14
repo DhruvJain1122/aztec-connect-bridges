@@ -3,32 +3,16 @@
 pragma solidity >=0.8.4;
 
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {IDefiBridge} from "../../aztec/interfaces/IDefiBridge.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IRollupProcessor} from "../../aztec/interfaces/IRollupProcessor.sol";
 
 import {AztecTypes} from "../../aztec/libraries/AztecTypes.sol";
+import {ErrorLib} from "../base/ErrorLib.sol";
+import {Ttoken} from "./../../interfaces/tokemak/Ttoken.sol";
+import {IManager} from "./../../interfaces/tokemak/IManager.sol";
 
-interface Ttoken is IERC20 {
-    function requestedWithdrawals(address account) external view returns (uint256, uint256);
-
-    function requestWithdrawal(uint256 amount) external;
-
-    function deposit(uint256 amount) external payable;
-
-    function withdraw(uint256 requestedAmount) external;
-
-    function withdraw(uint256 requestedAmount, bool asEth) external;
-
-    function underlyer() external view returns (address);
-}
-
-interface IManager {
-    function getCurrentCycleIndex() external view returns (uint256);
-
-    function getPools() external view returns (address[] memory);
-}
 
 contract TokemakBridge is IDefiBridge {
     using SafeERC20 for IERC20;
@@ -46,11 +30,6 @@ contract TokemakBridge is IDefiBridge {
 
     mapping(address => address) tTokens;
     mapping(address => address) assets;
-
-    error InvalidCaller();
-    error InvalidAssetType();
-    error InvalidAsset(address token);
-    error InvalidInput();
 
     struct Interaction {
         uint256 inputValue;
@@ -93,32 +72,26 @@ contract TokemakBridge is IDefiBridge {
         )
     {
         // // ### INITIALIZATION AND SANITY CHECKS
-        if (msg.sender != rollupProcessor) revert InvalidCaller();
-        if (inputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert InvalidAssetType();
-        if (outputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert InvalidAssetType();
+        if (msg.sender != rollupProcessor) revert ErrorLib.InvalidCaller();
+        if (inputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert ErrorLib.InvalidInputA();
+        if (outputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert  ErrorLib.InvalidOutputA();
 
         // Check whether the call is for withdrawal or deposit
         bool isWithdrawal = auxData != 0;
 
+        address tAsset = isWithdrawal ? inputAssetA.erc20Address : tTokens[inputAssetA.erc20Address];
+        if (tAsset == address(0)) revert ErrorLib.InvalidInput();
+
         if (isWithdrawal) {
             if (assets[inputAssetA.erc20Address] != outputAssetA.erc20Address)
-                revert InvalidAsset(inputAssetA.erc20Address);
-        } else {
-            if (tTokens[inputAssetA.erc20Address] != outputAssetA.erc20Address)
-                revert InvalidAsset(inputAssetA.erc20Address);
-        }
-
-        address tAsset = isWithdrawal ? inputAssetA.erc20Address : tTokens[inputAssetA.erc20Address];
-
-        if (tAsset == address(0)) revert InvalidAsset(tAsset);
-
-        // Withdraw or Deposit
-        if (isWithdrawal) {
+                revert ErrorLib.InvalidInput();
             isAsync = true;
             outputValueA = 0;
             addWithdrawalNonce(interactionNonce, tAsset, totalInputValue);
         } else {
-            isAsync = false;
+            if (tTokens[inputAssetA.erc20Address] != outputAssetA.erc20Address)
+                revert ErrorLib.InvalidInput();
+
             outputValueA = deposit(tAsset, totalInputValue, inputAssetA.erc20Address);
         }
 
@@ -142,16 +115,18 @@ contract TokemakBridge is IDefiBridge {
             bool interactionCompleted
         )
     {
-        if (msg.sender != rollupProcessor) revert InvalidCaller();
-        if (inputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert InvalidAssetType();
-        if (outputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert InvalidAssetType();
+        if (msg.sender != rollupProcessor) revert ErrorLib.InvalidCaller();
+        if (inputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert  ErrorLib.InvalidInputA();
+        if (outputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert ErrorLib.InvalidOutputA();
+
+
+        address tAsset = inputAssetA.erc20Address;
+        if (tAsset == address(0)) revert ErrorLib.InvalidInputA();
 
         // Pending withdrawal value
         uint256 inputValue = pendingInteractions[interactionNonce].inputValue;
-        if (inputValue <= 0) revert InvalidInput();
+        if (inputValue == 0) revert ErrorLib.InvalidInput();
 
-        address tAsset = inputAssetA.erc20Address;
-        if (tAsset == address(0)) revert InvalidAsset(tAsset);
         // Withdraw pending withdrawals
         (outputValueA, interactionCompleted) = finaliseWithdraw(tAsset, inputValue, interactionNonce);
     }
@@ -189,7 +164,7 @@ contract TokemakBridge is IDefiBridge {
         while (gasleft() > gasLoopCondition) {
             // check the heap to see if we can finalise an expired transaction
             // we provide a gas floor to the function which will enable us to leave this function without breaching our gasFloor
-            (bool available, uint256 nonce) = checkForNextInteractionToFinalise(ourGasFloor);
+            (bool available, uint256 nonce) = getNextInteractionToFinalise(ourGasFloor);
             if (!available) {
                 break;
             }
@@ -214,7 +189,7 @@ contract TokemakBridge is IDefiBridge {
      * @dev Function to get the next interaction to finalise
      * @param gasFloor The amount of gas that needs to remain after this call has completed
      */
-    function checkForNextInteractionToFinalise(uint256 gasFloor) internal returns (bool, uint256) {
+    function getNextInteractionToFinalise(uint256 gasFloor) internal returns (bool, uint256) {
         // do we have any expiries and if so is the earliest expiry now expired
         uint256 nonce = lastProcessedNonce;
         if (nonce == 0 && firstAddedNonce != 0) {

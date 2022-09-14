@@ -5,6 +5,7 @@ import {Vm} from "../../../lib/forge-std/src/Vm.sol";
 
 import {DefiBridgeProxy} from "./../../aztec/DefiBridgeProxy.sol";
 import {RollupProcessor} from "./../../aztec/RollupProcessor.sol";
+import {BridgeTestBase} from "./../../aztec/base/BridgeTestBase.sol";
 
 // Example-specific imports
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -15,7 +16,7 @@ import {AztecTypes} from "./../../aztec/libraries/AztecTypes.sol";
 
 import "../../../lib/ds-test/src/test.sol";
 
-contract TokemakBridgeTest is DSTest {
+contract TokemakBridgeTest is BridgeTestBase {
     Vm constant vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
     address public constant tWETH = 0xD3D13a578a53685B4ac36A1Bab31912D2B2A2F36;
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
@@ -30,17 +31,15 @@ contract TokemakBridgeTest is DSTest {
     TokemakBridge bridge;
     AztecTypes.AztecAsset private empty;
 
-    function _aztecPreSetup() internal {
-        defiBridgeProxy = new DefiBridgeProxy();
-        rollupProcessor = new RollupProcessor(address(defiBridgeProxy));
-    }
 
     function setUp() public {
-        _aztecPreSetup();
+        bridge = new LidoBridge(address(ROLLUP_PROCESSOR), address(ROLLUP_PROCESSOR));
 
-        bridge = new TokemakBridge(address(rollupProcessor));
+        vm.deal(address(bridge), 0);
+        vm.prank(MULTI_SIG);
 
-        rollupProcessor.setBridgeGasLimit(address(bridge), 2000000);
+        ROLLUP_PROCESSOR.setSupportedBridge(address(bridge), 2000000);
+        bridgeAddressId = ROLLUP_PROCESSOR.getSupportedBridgesLength();
     }
 
     function testTokemakBridge() public {
@@ -104,8 +103,9 @@ contract TokemakBridgeTest is DSTest {
             erc20Address: tAsset,
             assetType: AztecTypes.AztecAssetType.ERC20
         });
-
-        (uint256 outputValueA, uint256 outputValueB, bool isAsync) = rollupProcessor.convert(
+        
+        vm.startPrank(address(ROLLUP_PROCESSOR));
+        (uint256 outputValueA, uint256 outputValueB, bool isAsync) = bridge.convert(
             address(bridge),
             wAsset,
             empty,
@@ -137,7 +137,8 @@ contract TokemakBridgeTest is DSTest {
             assetType: AztecTypes.AztecAssetType.ERC20
         });
 
-        (uint256 outputValueA, uint256 outputValueB, bool isAsync) = rollupProcessor.convert(
+        vm.startPrank(address(ROLLUP_PROCESSOR));
+        (uint256 outputValueA, uint256 outputValueB, bool isAsync) = bridge.convert(
             address(bridge),
             wtAsset,
             empty,
