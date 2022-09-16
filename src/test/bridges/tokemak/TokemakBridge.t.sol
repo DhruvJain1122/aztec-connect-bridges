@@ -1,44 +1,43 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity 0.8.10;
 
-import {Vm} from "../../../lib/forge-std/src/Vm.sol";
-
-import {DefiBridgeProxy} from "./../../aztec/DefiBridgeProxy.sol";
-import {RollupProcessor} from "./../../aztec/RollupProcessor.sol";
 import {BridgeTestBase} from "./../../aztec/base/BridgeTestBase.sol";
 
 // Example-specific imports
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IManager} from "./interfaces/Manager.sol";
-import {TokemakBridge} from "./../../bridges/tokemak/TokemakBridge.sol";
+import {IManager} from "../../../interfaces/tokemak/IManager.sol";
 
-import {AztecTypes} from "./../../aztec/libraries/AztecTypes.sol";
+import {TokemakBridge} from "../../../bridges/tokemak/TokemakBridge.sol";
 
-import "../../../lib/ds-test/src/test.sol";
+import {AztecTypes} from "../../../aztec/libraries/AztecTypes.sol";
 
 contract TokemakBridgeTest is BridgeTestBase {
-    Vm constant vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
+    // Vm constant vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
     address public constant tWETH = 0xD3D13a578a53685B4ac36A1Bab31912D2B2A2F36;
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address public constant MANAGER = 0xA86e412109f77c45a3BC1c5870b880492Fb86A14;
     address public constant DEPLOYER = 0x9e0bcE7ec474B481492610eB9dd5D69EB03718D5;
-    uint256 constant WETH_SLOT = 3;
-    DefiBridgeProxy defiBridgeProxy;
-    RollupProcessor rollupProcessor;
     event TokenBalance(uint256 previousBalance, uint256 newBalance);
 
-    uint256 nonce = 1;
+    uint256 nonce;
     TokemakBridge bridge;
     AztecTypes.AztecAsset private empty;
 
+    uint256 private bridgeAddressId;
 
     function setUp() public {
-        bridge = new LidoBridge(address(ROLLUP_PROCESSOR), address(ROLLUP_PROCESSOR));
-
+        bridge = new TokemakBridge(address(ROLLUP_PROCESSOR));
         vm.deal(address(bridge), 0);
-        vm.prank(MULTI_SIG);
+        vm.startPrank(MULTI_SIG);
 
         ROLLUP_PROCESSOR.setSupportedBridge(address(bridge), 2000000);
+
+        ROLLUP_PROCESSOR.setSupportedAsset(WETH, 100000);
+
+        ROLLUP_PROCESSOR.setSupportedAsset(tWETH, 100000);
+
+        vm.stopPrank();
+
         bridgeAddressId = ROLLUP_PROCESSOR.getSupportedBridgesLength();
     }
 
@@ -47,15 +46,13 @@ contract TokemakBridgeTest is BridgeTestBase {
     }
 
     function validateTokemakBridge(uint256 balance, uint256 depositAmount) public {
-        _setTokenBalance(WETH, address(rollupProcessor), balance * 3, WETH_SLOT);
+        deal(WETH, address(ROLLUP_PROCESSOR), balance * 3);
 
         //Deposit to Pool
         uint256 output = depositToPool(WETH, tWETH, depositAmount);
-        nonce += 1;
 
         //Request Withdraw
         requestWithdrawFromPool(WETH, tWETH, output);
-        nonce += 1;
 
         //Next Cycle
         uint256 newTimestamp = 1748641030;
@@ -65,9 +62,11 @@ contract TokemakBridgeTest is BridgeTestBase {
         IManager(MANAGER).completeRollover("complete2");
         vm.stopPrank();
 
+        nonce = getNextNonce();
+
         //Test if automatic process withdrawal working
         uint256 output2 = depositToPool(WETH, tWETH, depositAmount * 2);
-        nonce += 1;
+
 
         //Request Withdraw
         requestWithdrawFromPool(WETH, tWETH, output2);
@@ -90,32 +89,16 @@ contract TokemakBridgeTest is BridgeTestBase {
         uint256 depositAmount
     ) public returns (uint256) {
         IERC20 assetToken = IERC20(asset);
-        uint256 beforeBalance = assetToken.balanceOf(address(rollupProcessor));
+        uint256 beforeBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
 
-        AztecTypes.AztecAsset memory wAsset = AztecTypes.AztecAsset({
-            id: 1,
-            erc20Address: asset,
-            assetType: AztecTypes.AztecAssetType.ERC20
-        });
+        AztecTypes.AztecAsset memory wAsset = getRealAztecAsset(asset);
 
-        AztecTypes.AztecAsset memory wtAsset = AztecTypes.AztecAsset({
-            id: 1,
-            erc20Address: tAsset,
-            assetType: AztecTypes.AztecAssetType.ERC20
-        });
-        
-        vm.startPrank(address(ROLLUP_PROCESSOR));
-        (uint256 outputValueA, uint256 outputValueB, bool isAsync) = bridge.convert(
-            address(bridge),
-            wAsset,
-            empty,
-            wtAsset,
-            empty,
-            depositAmount,
-            nonce,
-            0
-        );
-        uint256 afterBalance = assetToken.balanceOf(address(rollupProcessor));
+        AztecTypes.AztecAsset memory wtAsset = getRealAztecAsset(tAsset);
+
+        uint256 bridgeCallData = encodeBridgeCallData(bridgeAddressId, wAsset, empty, wtAsset, empty, 0);
+
+        (uint256 outputValueA, , ) = sendDefiRollup(bridgeCallData, depositAmount);
+        uint256 afterBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
         emit TokenBalance(beforeBalance, afterBalance);
         return outputValueA;
     }
@@ -125,49 +108,22 @@ contract TokemakBridgeTest is BridgeTestBase {
         address tAsset,
         uint256 depositAmount
     ) public returns (uint256) {
-        AztecTypes.AztecAsset memory wAsset = AztecTypes.AztecAsset({
-            id: 1,
-            erc20Address: asset,
-            assetType: AztecTypes.AztecAssetType.ERC20
-        });
+        AztecTypes.AztecAsset memory wAsset = getRealAztecAsset(asset);
 
-        AztecTypes.AztecAsset memory wtAsset = AztecTypes.AztecAsset({
-            id: 1,
-            erc20Address: tAsset,
-            assetType: AztecTypes.AztecAssetType.ERC20
-        });
+        AztecTypes.AztecAsset memory wtAsset = getRealAztecAsset(tAsset);
 
-        vm.startPrank(address(ROLLUP_PROCESSOR));
-        (uint256 outputValueA, uint256 outputValueB, bool isAsync) = bridge.convert(
-            address(bridge),
-            wtAsset,
-            empty,
-            wAsset,
-            empty,
-            depositAmount,
-            nonce,
-            1
-        );
+        uint256 bridgeCallData = encodeBridgeCallData(bridgeAddressId, wAsset, empty, wtAsset, empty, 0);
+
+        (uint256 outputValueA, , ) = sendDefiRollup(bridgeCallData, depositAmount);
 
         return outputValueA;
     }
 
     function processPendingWithdrawal(address asset) public {
         IERC20 assetToken = IERC20(asset);
-        uint256 beforeBalance = assetToken.balanceOf(address(rollupProcessor));
-        bool completed = rollupProcessor.processAsyncDefiInteraction(nonce);
-        uint256 afterBalance = assetToken.balanceOf(address(rollupProcessor));
+        uint256 beforeBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
+        bool completed = ROLLUP_PROCESSOR.processAsyncDefiInteraction(nonce);
+        uint256 afterBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
         emit TokenBalance(beforeBalance, afterBalance);
-    }
-
-    function _setTokenBalance(
-        address token,
-        address user,
-        uint256 balance,
-        uint256 slot
-    ) internal {
-        vm.store(token, keccak256(abi.encode(user, slot)), bytes32(uint256(balance)));
-
-        assertEq(IERC20(token).balanceOf(user), balance, "wrong balance");
     }
 }
