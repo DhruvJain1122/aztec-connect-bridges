@@ -28,7 +28,6 @@ contract TokemakBridge is BridgeBase {
 
     address public constant MANAGER = 0xA86e412109f77c45a3BC1c5870b880492Fb86A14;
 
-    address public immutable ROLLUP_PROCESSOR;
 
     uint256 internal constant MAX_UINT = type(uint256).max;
 
@@ -51,8 +50,7 @@ contract TokemakBridge is BridgeBase {
      * @dev Constructor
      * @param _rollupProcessor the address of the rollup contract
      */
-    constructor(address _rollupProcessor) public {
-        ROLLUP_PROCESSOR = _rollupProcessor;
+    constructor(address _rollupProcessor) public BridgeBase(_rollupProcessor) {
         loadTokens();
     }
 
