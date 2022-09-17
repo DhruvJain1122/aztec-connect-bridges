@@ -46,11 +46,27 @@ contract TokemakBridge is IDefiBridge {
     // cache of all of our Defi interactions. keyed on nonce
     mapping(uint256 => Interaction) public pendingInteractions;
 
+    /**
+     * @dev Constructor
+     * @param _rollupProcessor the address of the rollup contract
+     */
     constructor(address _rollupProcessor) public {
         rollupProcessor = _rollupProcessor;
         loadTokens();
     }
 
+    /**
+     * @dev Function to add a new interaction to the bridge
+     * Converts the amount of input asset given to the market determined amount of tranche asset
+     * @param inputAssetA The type of input asset for the new interaction
+     * @param outputAssetA The type of output asset for the new interaction
+     * @param totalInputValue The amount the the input asset provided in this interaction
+     * @param interactionNonce The nonce value for this interaction
+     * @param auxData The expiry value for this interaction
+     * @return outputValueA The interaction's first ouptut value after this call - will be 0
+     * @return outputValueB The interaction's second ouptut value after this call - will be 0
+     * @return isAsync Flag specifying if this interaction is asynchronous - will be true
+     */
     function convert(
         AztecTypes.AztecAsset memory inputAssetA,
         AztecTypes.AztecAsset memory inputAssetB,
@@ -83,7 +99,9 @@ contract TokemakBridge is IDefiBridge {
 
         if (isWithdrawal) {
             if (assets[inputAssetA.erc20Address] != outputAssetA.erc20Address) revert ErrorLib.InvalidInput();
-            (outputValueA, isAsync) = addWithdrawalNonce(interactionNonce, tAsset, totalInputValue);
+            addWithdrawalNonce(interactionNonce, tAsset, totalInputValue);
+            outputValueA = 0;
+            isAsync = false;
         } else {
             if (tTokens[inputAssetA.erc20Address] != outputAssetA.erc20Address) revert ErrorLib.InvalidInput();
 
@@ -93,6 +111,11 @@ contract TokemakBridge is IDefiBridge {
         finalisePendingInteractions(MIN_GAS_FOR_FUNCTION_COMPLETION);
     }
 
+    /**
+     * @dev Function to finalise an interaction
+     * Converts the held amount of tranche asset for the given interaction into the output asset
+     * @param interactionNonce The nonce value for the interaction that should be finalised
+     */
     function finalise(
         AztecTypes.AztecAsset calldata inputAssetA,
         AztecTypes.AztecAsset calldata,
@@ -125,6 +148,9 @@ contract TokemakBridge is IDefiBridge {
         (outputValueA, interactionCompleted) = finaliseWithdraw(tAsset, inputValue, interactionNonce);
     }
 
+    /**
+     * @dev Function called to automatically fetch all the Pools from Tokemak Manager
+     */
     function loadTokens() public {
         IManager manager = IManager(MANAGER);
         address[] memory pools = manager.getPools();
@@ -215,7 +241,13 @@ contract TokemakBridge is IDefiBridge {
         return (false, 0);
     }
 
-    function canWithdraw(address tAsset, uint256 inputValue) private returns (bool) {
+     /**
+     * @dev Function to check if we can withdraw
+     * @param tAsset The tokemak lp token used to withdraw
+     * @param inputValue Amount to withdraw
+     * @return withdraw if we can withdraw boolean
+     */
+    function canWithdraw(address tAsset, uint256 inputValue) private returns (bool withdraw) {
         Ttoken tToken = Ttoken(tAsset);
 
         // Get our current request withdrawal data
@@ -227,11 +259,17 @@ contract TokemakBridge is IDefiBridge {
         return (!(inputValue > requestedWithdrawalAmount || currentCycleIndex < minCycle));
     }
 
+    /**
+     * @dev Function to add withdrawal nonce
+     * @param nonce Current Nonce
+     * @param tAsset The tokemak lp token used to withdraw
+     * @param inputValue Amount to withdraw
+     */
     function addWithdrawalNonce(
         uint256 nonce,
         address tAsset,
         uint256 inputValue
-    ) private returns (uint256, bool) {
+    ) private {
         Ttoken tToken = Ttoken(tAsset);
         tToken.requestWithdrawal(inputValue);
         if (lastProcessedNonce == 0) {
@@ -240,9 +278,16 @@ contract TokemakBridge is IDefiBridge {
         pendingInteractions[nonce] = Interaction(inputValue, tAsset, 0, lastAddedNonce);
         pendingInteractions[lastAddedNonce].nextNonce = nonce;
         lastAddedNonce = nonce;
-        return (0, true);
     }
 
+    /**
+     * @dev Function to finalise a pending withdrawal
+     * @param tAsset The tokemak lp token used to withdraw
+     * @param nonce Current Nonce
+     * @param inputValue Amount to withdraw
+     * @return outputValue Amount withdrawn
+     * @return withdrawComplete bool is withdraw complete
+     */
     function finaliseWithdraw(
         address tAsset,
         uint256 inputValue,
@@ -284,6 +329,13 @@ contract TokemakBridge is IDefiBridge {
         delete pendingInteractions[nonce];
     }
 
+    /**
+     * @dev Function to deposit in tokemak pool
+     * @param tAsset Tokemak pool to deposit
+     * @param inputValue Amount to withdraw
+     * @param asset Asset to deposit
+     * @return outputValue Output amount of tAsset after deposit
+     */
     function deposit(
         address tAsset,
         uint256 inputValue,
