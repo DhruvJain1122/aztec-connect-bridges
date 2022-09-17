@@ -101,7 +101,7 @@ contract TokemakBridge is IDefiBridge {
             if (assets[inputAssetA.erc20Address] != outputAssetA.erc20Address) revert ErrorLib.InvalidInput();
             addWithdrawalNonce(interactionNonce, tAsset, totalInputValue);
             outputValueA = 0;
-            isAsync = false;
+            isAsync = true;
         } else {
             if (tTokens[inputAssetA.erc20Address] != outputAssetA.erc20Address) revert ErrorLib.InvalidInput();
 
@@ -241,7 +241,7 @@ contract TokemakBridge is IDefiBridge {
         return (false, 0);
     }
 
-     /**
+    /**
      * @dev Function to check if we can withdraw
      * @param tAsset The tokemak lp token used to withdraw
      * @param inputValue Amount to withdraw

@@ -69,12 +69,12 @@ contract TokemakBridgeTest is BridgeTestBase {
         IManager(MANAGER).completeRollover("complete2");
         vm.stopPrank();
 
-
         //Test if automatic process withdrawal working
         uint256 output2 = depositToPool(depositAmount * 2);
 
         nonce = getNextNonce();
 
+        //Request Withdraw
         requestWithdrawFromPool(output2);
 
         //Next Cycle
@@ -85,15 +85,11 @@ contract TokemakBridgeTest is BridgeTestBase {
         IManager(MANAGER).completeRollover("complete4");
         vm.stopPrank();
 
-        //Request Withdraw
-
         //Withdraw
         processPendingWithdrawal(WETH);
     }
 
-    function depositToPool(
-        uint256 depositAmount
-    ) public returns (uint256) {
+    function depositToPool(uint256 depositAmount) public returns (uint256) {
         IERC20 assetToken = IERC20(WETH);
         uint256 beforeBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
 
@@ -108,9 +104,7 @@ contract TokemakBridgeTest is BridgeTestBase {
         return outputValueA;
     }
 
-    function requestWithdrawFromPool(
-        uint256 withdrawAmount
-    ) public returns (uint256) {
+    function requestWithdrawFromPool(uint256 withdrawAmount) public returns (uint256) {
         IERC20 assetToken = IERC20(WETH);
 
         uint256 beforeBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
