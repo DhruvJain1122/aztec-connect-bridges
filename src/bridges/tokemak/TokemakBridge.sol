@@ -14,7 +14,6 @@ import {Ttoken} from "./../../interfaces/tokemak/Ttoken.sol";
 import {IManager} from "./../../interfaces/tokemak/IManager.sol";
 
 contract TokemakBridge is BridgeBase {
-
     using SafeERC20 for IERC20;
 
     struct Interaction {
@@ -27,7 +26,6 @@ contract TokemakBridge is BridgeBase {
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
 
     address public constant MANAGER = 0xA86e412109f77c45a3BC1c5870b880492Fb86A14;
-
 
     uint256 internal constant MAX_UINT = type(uint256).max;
 
