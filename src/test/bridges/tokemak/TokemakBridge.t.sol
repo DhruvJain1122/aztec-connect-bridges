@@ -13,20 +13,21 @@ import {AztecTypes} from "../../../aztec/libraries/AztecTypes.sol";
 
 contract TokemakBridgeTest is BridgeTestBase {
     // Vm constant vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
-    address public constant tWETH = 0xD3D13a578a53685B4ac36A1Bab31912D2B2A2F36;
+    address public constant T_WETH = 0xD3D13a578a53685B4ac36A1Bab31912D2B2A2F36;
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address public constant MANAGER = 0xA86e412109f77c45a3BC1c5870b880492Fb86A14;
     address public constant DEPLOYER = 0x9e0bcE7ec474B481492610eB9dd5D69EB03718D5;
-    event TokenBalance(uint256 previousBalance, uint256 newBalance);
 
-    uint256 nonce;
-    TokemakBridge bridge;
+    uint256 private nonce;
+    TokemakBridge private bridge;
     AztecTypes.AztecAsset private empty;
 
     uint256 private bridgeAddressId;
 
     AztecTypes.AztecAsset private wAsset;
     AztecTypes.AztecAsset private wtAsset;
+
+    event TokenBalance(uint256 previousBalance, uint256 newBalance);
 
     function setUp() public {
         bridge = new TokemakBridge(address(ROLLUP_PROCESSOR));
@@ -37,7 +38,7 @@ contract TokemakBridgeTest is BridgeTestBase {
 
         ROLLUP_PROCESSOR.setSupportedAsset(WETH, 100000);
 
-        ROLLUP_PROCESSOR.setSupportedAsset(tWETH, 100000);
+        ROLLUP_PROCESSOR.setSupportedAsset(T_WETH, 100000);
 
         vm.stopPrank();
 
@@ -45,18 +46,18 @@ contract TokemakBridgeTest is BridgeTestBase {
 
         wAsset = getRealAztecAsset(WETH);
 
-        wtAsset = getRealAztecAsset(tWETH);
+        wtAsset = getRealAztecAsset(T_WETH);
     }
 
     function testTokemakBridge() public {
         validateTokemakBridge(1000, 500);
     }
 
-    function validateTokemakBridge(uint256 balance, uint256 depositAmount) public {
-        deal(WETH, address(ROLLUP_PROCESSOR), balance * 3);
+    function validateTokemakBridge(uint256 _balance, uint256 _depositAmount) public {
+        deal(WETH, address(ROLLUP_PROCESSOR), _balance * 3);
 
         //Deposit to Pool
-        uint256 output = depositToPool(depositAmount);
+        uint256 output = depositToPool(_depositAmount);
 
         //Request Withdraw
         requestWithdrawFromPool(output);
@@ -70,7 +71,7 @@ contract TokemakBridgeTest is BridgeTestBase {
         vm.stopPrank();
 
         //Test if automatic process withdrawal working
-        uint256 output2 = depositToPool(depositAmount * 2);
+        uint256 output2 = depositToPool(_depositAmount * 2);
 
         nonce = getNextNonce();
 
@@ -86,16 +87,16 @@ contract TokemakBridgeTest is BridgeTestBase {
         vm.stopPrank();
 
         //Withdraw
-        processPendingWithdrawal(WETH);
+        processPendingWithdrawal();
     }
 
-    function depositToPool(uint256 depositAmount) public returns (uint256) {
+    function depositToPool(uint256 _depositAmount) public returns (uint256) {
         IERC20 assetToken = IERC20(WETH);
         uint256 beforeBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
 
         uint256 bridgeCallData = encodeBridgeCallData(bridgeAddressId, wAsset, empty, wtAsset, empty, 0);
 
-        (uint256 outputValueA, , ) = sendDefiRollup(bridgeCallData, depositAmount);
+        (uint256 outputValueA, , ) = sendDefiRollup(bridgeCallData, _depositAmount);
 
         uint256 afterBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
 
@@ -104,23 +105,23 @@ contract TokemakBridgeTest is BridgeTestBase {
         return outputValueA;
     }
 
-    function requestWithdrawFromPool(uint256 withdrawAmount) public returns (uint256) {
+    function requestWithdrawFromPool(uint256 _withdrawAmount) public returns (uint256) {
         IERC20 assetToken = IERC20(WETH);
 
         uint256 beforeBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
         uint256 bridgeCallData = encodeBridgeCallData(bridgeAddressId, wtAsset, empty, wAsset, empty, 1);
 
-        (uint256 outputValueA, , ) = sendDefiRollup(bridgeCallData, withdrawAmount);
+        (uint256 outputValueA, , ) = sendDefiRollup(bridgeCallData, _withdrawAmount);
         uint256 afterBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
 
         emit TokenBalance(beforeBalance, afterBalance);
         return outputValueA;
     }
 
-    function processPendingWithdrawal(address asset) public {
+    function processPendingWithdrawal() public {
         IERC20 assetToken = IERC20(WETH);
         uint256 beforeBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
-        bool completed = ROLLUP_PROCESSOR.processAsyncDefiInteraction(nonce);
+        ROLLUP_PROCESSOR.processAsyncDefiInteraction(nonce);
         uint256 afterBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
         emit TokenBalance(beforeBalance, afterBalance);
     }
