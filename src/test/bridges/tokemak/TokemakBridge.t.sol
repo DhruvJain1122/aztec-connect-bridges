@@ -25,6 +25,9 @@ contract TokemakBridgeTest is BridgeTestBase {
 
     uint256 private bridgeAddressId;
 
+    AztecTypes.AztecAsset private wAsset;
+    AztecTypes.AztecAsset private wtAsset;
+
     function setUp() public {
         bridge = new TokemakBridge(address(ROLLUP_PROCESSOR));
         vm.deal(address(bridge), 0);
@@ -39,6 +42,10 @@ contract TokemakBridgeTest is BridgeTestBase {
         vm.stopPrank();
 
         bridgeAddressId = ROLLUP_PROCESSOR.getSupportedBridgesLength();
+
+        wAsset = getRealAztecAsset(WETH);
+
+        wtAsset = getRealAztecAsset(tWETH);
     }
 
     function testTokemakBridge() public {
@@ -49,10 +56,10 @@ contract TokemakBridgeTest is BridgeTestBase {
         deal(WETH, address(ROLLUP_PROCESSOR), balance * 3);
 
         //Deposit to Pool
-        uint256 output = depositToPool(WETH, tWETH, depositAmount);
+        uint256 output = depositToPool(depositAmount);
 
         //Request Withdraw
-        requestWithdrawFromPool(WETH, tWETH, output);
+        requestWithdrawFromPool(output);
 
         //Next Cycle
         uint256 newTimestamp = 1748641030;
@@ -62,14 +69,13 @@ contract TokemakBridgeTest is BridgeTestBase {
         IManager(MANAGER).completeRollover("complete2");
         vm.stopPrank();
 
-        nonce = getNextNonce();
 
         //Test if automatic process withdrawal working
-        uint256 output2 = depositToPool(WETH, tWETH, depositAmount * 2);
+        uint256 output2 = depositToPool(depositAmount * 2);
 
+        nonce = getNextNonce();
 
-        //Request Withdraw
-        requestWithdrawFromPool(WETH, tWETH, output2);
+        requestWithdrawFromPool(output2);
 
         //Next Cycle
         newTimestamp = 1758641030;
@@ -79,48 +85,46 @@ contract TokemakBridgeTest is BridgeTestBase {
         IManager(MANAGER).completeRollover("complete4");
         vm.stopPrank();
 
+        //Request Withdraw
+
         //Withdraw
         processPendingWithdrawal(WETH);
     }
 
     function depositToPool(
-        address asset,
-        address tAsset,
         uint256 depositAmount
     ) public returns (uint256) {
-        IERC20 assetToken = IERC20(asset);
+        IERC20 assetToken = IERC20(WETH);
         uint256 beforeBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
-
-        AztecTypes.AztecAsset memory wAsset = getRealAztecAsset(asset);
-
-        AztecTypes.AztecAsset memory wtAsset = getRealAztecAsset(tAsset);
 
         uint256 bridgeCallData = encodeBridgeCallData(bridgeAddressId, wAsset, empty, wtAsset, empty, 0);
 
         (uint256 outputValueA, , ) = sendDefiRollup(bridgeCallData, depositAmount);
+
         uint256 afterBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
+
         emit TokenBalance(beforeBalance, afterBalance);
+
         return outputValueA;
     }
 
     function requestWithdrawFromPool(
-        address asset,
-        address tAsset,
-        uint256 depositAmount
+        uint256 withdrawAmount
     ) public returns (uint256) {
-        AztecTypes.AztecAsset memory wAsset = getRealAztecAsset(asset);
+        IERC20 assetToken = IERC20(WETH);
 
-        AztecTypes.AztecAsset memory wtAsset = getRealAztecAsset(tAsset);
+        uint256 beforeBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
+        uint256 bridgeCallData = encodeBridgeCallData(bridgeAddressId, wtAsset, empty, wAsset, empty, 1);
 
-        uint256 bridgeCallData = encodeBridgeCallData(bridgeAddressId, wAsset, empty, wtAsset, empty, 0);
+        (uint256 outputValueA, , ) = sendDefiRollup(bridgeCallData, withdrawAmount);
+        uint256 afterBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
 
-        (uint256 outputValueA, , ) = sendDefiRollup(bridgeCallData, depositAmount);
-
+        emit TokenBalance(beforeBalance, afterBalance);
         return outputValueA;
     }
 
     function processPendingWithdrawal(address asset) public {
-        IERC20 assetToken = IERC20(asset);
+        IERC20 assetToken = IERC20(WETH);
         uint256 beforeBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));
         bool completed = ROLLUP_PROCESSOR.processAsyncDefiInteraction(nonce);
         uint256 afterBalance = assetToken.balanceOf(address(ROLLUP_PROCESSOR));

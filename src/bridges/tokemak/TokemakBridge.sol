@@ -13,7 +13,6 @@ import {ErrorLib} from "../base/ErrorLib.sol";
 import {Ttoken} from "./../../interfaces/tokemak/Ttoken.sol";
 import {IManager} from "./../../interfaces/tokemak/IManager.sol";
 
-
 contract TokemakBridge is IDefiBridge {
     using SafeERC20 for IERC20;
 
@@ -74,7 +73,7 @@ contract TokemakBridge is IDefiBridge {
         // // ### INITIALIZATION AND SANITY CHECKS
         if (msg.sender != rollupProcessor) revert ErrorLib.InvalidCaller();
         if (inputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert ErrorLib.InvalidInputA();
-        if (outputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert  ErrorLib.InvalidOutputA();
+        if (outputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert ErrorLib.InvalidOutputA();
 
         // Check whether the call is for withdrawal or deposit
         bool isWithdrawal = auxData != 0;
@@ -83,14 +82,10 @@ contract TokemakBridge is IDefiBridge {
         if (tAsset == address(0)) revert ErrorLib.InvalidInput();
 
         if (isWithdrawal) {
-            if (assets[inputAssetA.erc20Address] != outputAssetA.erc20Address)
-                revert ErrorLib.InvalidInput();
-            isAsync = true;
-            outputValueA = 0;
-            addWithdrawalNonce(interactionNonce, tAsset, totalInputValue);
+            if (assets[inputAssetA.erc20Address] != outputAssetA.erc20Address) revert ErrorLib.InvalidInput();
+            (outputValueA, isAsync) = addWithdrawalNonce(interactionNonce, tAsset, totalInputValue);
         } else {
-            if (tTokens[inputAssetA.erc20Address] != outputAssetA.erc20Address)
-                revert ErrorLib.InvalidInput();
+            if (tTokens[inputAssetA.erc20Address] != outputAssetA.erc20Address) revert ErrorLib.InvalidInput();
 
             outputValueA = deposit(tAsset, totalInputValue, inputAssetA.erc20Address);
         }
@@ -116,9 +111,8 @@ contract TokemakBridge is IDefiBridge {
         )
     {
         if (msg.sender != rollupProcessor) revert ErrorLib.InvalidCaller();
-        if (inputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert  ErrorLib.InvalidInputA();
+        if (inputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert ErrorLib.InvalidInputA();
         if (outputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert ErrorLib.InvalidOutputA();
-
 
         address tAsset = inputAssetA.erc20Address;
         if (tAsset == address(0)) revert ErrorLib.InvalidInputA();
@@ -188,8 +182,10 @@ contract TokemakBridge is IDefiBridge {
     /**
      * @dev Function to get the next interaction to finalise
      * @param gasFloor The amount of gas that needs to remain after this call has completed
+     * @return expiryAvailable Flag specifying whether an expiry is available to be finalised
+     * @return nonce The next interaction nonce to be finalised
      */
-    function getNextInteractionToFinalise(uint256 gasFloor) internal returns (bool, uint256) {
+    function getNextInteractionToFinalise(uint256 gasFloor) internal returns (bool expiryAvailable, uint256 nonce) {
         // do we have any expiries and if so is the earliest expiry now expired
         uint256 nonce = lastProcessedNonce;
         if (nonce == 0 && firstAddedNonce != 0) {
@@ -284,7 +280,7 @@ contract TokemakBridge is IDefiBridge {
         } else {
             lastProcessedNonce = nonce;
         }
-
+        withdrawComplete = true;
         delete pendingInteractions[nonce];
     }
 
