@@ -5,7 +5,7 @@ pragma solidity >=0.8.4;
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-import {IDefiBridge} from "../../aztec/interfaces/IDefiBridge.sol";
+import {BridgeBase} from "../base/BridgeBase.sol";
 import {IRollupProcessor} from "../../aztec/interfaces/IRollupProcessor.sol";
 
 import {AztecTypes} from "../../aztec/libraries/AztecTypes.sol";
@@ -13,15 +13,16 @@ import {ErrorLib} from "../base/ErrorLib.sol";
 import {Ttoken} from "./../../interfaces/tokemak/Ttoken.sol";
 import {IManager} from "./../../interfaces/tokemak/IManager.sol";
 
-contract TokemakBridge is IDefiBridge {
+contract TokemakBridge is BridgeBase {
+
+    using SafeERC20 for IERC20;
+
     struct Interaction {
         uint256 inputValue;
         address tAsset;
         uint256 nextNonce;
         uint256 previousNonce;
     }
-
-    using SafeERC20 for IERC20;
 
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
 
@@ -79,7 +80,7 @@ contract TokemakBridge is IDefiBridge {
     )
         external
         payable
-        override
+        override(BridgeBase)
         returns (
             uint256 outputValueA,
             uint256 outputValueB,
@@ -105,7 +106,7 @@ contract TokemakBridge is IDefiBridge {
         } else {
             if (tTokens[_inputAssetA.erc20Address] != _outputAssetA.erc20Address) revert ErrorLib.InvalidInput();
 
-            outputValueA = deposit(_tAsset, _totalInputValue);
+            outputValueA = _deposit(_tAsset, _totalInputValue);
         }
 
         _finalisePendingInteractions(MIN_GAS_FOR_FUNCTION_COMPLETION);
@@ -129,7 +130,7 @@ contract TokemakBridge is IDefiBridge {
     )
         external
         payable
-        override
+        override(BridgeBase)
         returns (
             uint256 outputValueA,
             uint256 outputValueB,
@@ -338,7 +339,7 @@ contract TokemakBridge is IDefiBridge {
      * @param _inputValue Amount to withdraw
      * @return outputValue Output amount of tAsset after deposit
      */
-    function deposit(address _tAsset, uint256 _inputValue) private returns (uint256 outputValue) {
+    function _deposit(address _tAsset, uint256 _inputValue) private returns (uint256 outputValue) {
         Ttoken tToken = Ttoken(_tAsset);
 
         // Asset balance before withdrawal for calculating outputValue
