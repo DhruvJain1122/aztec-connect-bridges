@@ -4,7 +4,7 @@ pragma solidity >=0.8.4;
 
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-
+import {IWETH} from "./../../interfaces/IWETH.sol";
 import {BridgeBase} from "../base/BridgeBase.sol";
 import {IRollupProcessor} from "../../aztec/interfaces/IRollupProcessor.sol";
 
@@ -23,7 +23,7 @@ contract TokemakBridge is BridgeBase {
         uint256 previousNonce;
     }
 
-    address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    IWETH public constant WETH = IWETH(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
 
     address public constant MANAGER = 0xA86e412109f77c45a3BC1c5870b880492Fb86A14;
 
@@ -48,7 +48,7 @@ contract TokemakBridge is BridgeBase {
      * @dev Constructor
      * @param _rollupProcessor the address of the rollup contract
      */
-    constructor(address _rollupProcessor) public BridgeBase(_rollupProcessor) {
+    constructor(address _rollupProcessor) BridgeBase(_rollupProcessor) {
         loadTokens();
     }
 
@@ -77,14 +77,22 @@ contract TokemakBridge is BridgeBase {
         external
         payable
         override(BridgeBase)
+        onlyRollup
         returns (
             uint256 outputValueA,
-            uint256 outputValueB,
+            uint256,
             bool isAsync
         )
     {
         // // ### INITIALIZATION AND SANITY CHECKS
-        if (msg.sender != ROLLUP_PROCESSOR) revert ErrorLib.InvalidCaller();
+        if (_inputAssetA.assetType == AztecTypes.AztecAssetType.ETH) {
+            (bool success, ) = address(WETH).call{value: _totalInputValue}(abi.encodeWithSignature("deposit()"));
+            if (success) {
+                _inputAssetA.erc20Address = address(WETH);
+                _inputAssetA.assetType = AztecTypes.AztecAssetType.ERC20;
+            }
+        }
+
         if (_inputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert ErrorLib.InvalidInputA();
         if (_outputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert ErrorLib.InvalidOutputA();
 
@@ -104,8 +112,9 @@ contract TokemakBridge is BridgeBase {
 
             outputValueA = _deposit(_tAsset, _totalInputValue);
         }
+        _finalisePendingInteractions();
 
-        _finalisePendingInteractions(MIN_GAS_FOR_FUNCTION_COMPLETION);
+        return (outputValueA, 0, isAsync);
     }
 
     /**
@@ -127,13 +136,15 @@ contract TokemakBridge is BridgeBase {
         external
         payable
         override(BridgeBase)
+        onlyRollup
         returns (
             uint256 outputValueA,
-            uint256 outputValueB,
+            uint256,
             bool interactionCompleted
         )
     {
-        if (msg.sender != ROLLUP_PROCESSOR) revert ErrorLib.InvalidCaller();
+        // if (msg.sender != ROLLUP_PROCESSOR) revert ErrorLib.InvalidCaller();
+
         if (_inputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert ErrorLib.InvalidInputA();
         if (_outputAssetA.assetType != AztecTypes.AztecAssetType.ERC20) revert ErrorLib.InvalidOutputA();
 
@@ -146,6 +157,8 @@ contract TokemakBridge is BridgeBase {
 
         // Withdraw pending withdrawals
         (outputValueA, interactionCompleted) = _finaliseWithdraw(_tAsset, _inputValue, _interactionNonce);
+
+        return (outputValueA, 0, interactionCompleted);
     }
 
     /**
@@ -174,9 +187,9 @@ contract TokemakBridge is BridgeBase {
     /**
      * @dev Function to attempt finalising of as many interactions as possible within the specified gas limit
      * Continue checking for and finalising interactions until we expend the available gas
-     * @param _gasFloor The amount of gas that needs to remain after this call has completed
      */
-    function _finalisePendingInteractions(uint256 _gasFloor) internal {
+    function _finalisePendingInteractions() internal {
+        uint256 _gasFloor = MIN_GAS_FOR_FUNCTION_COMPLETION;
         // check and finalise interactions until we don't have enough gas left to reliably update our state without risk of reverting the entire transaction
         // gas left must be enough for check for next expiry, finalise and leave this function without breaching _gasFloor
         uint256 _gasLoopCondition = MIN_GAS_FOR_CHECK_AND_FINALISE + MIN_GAS_FOR_FUNCTION_COMPLETION + _gasFloor;
@@ -196,7 +209,7 @@ contract TokemakBridge is BridgeBase {
             uint256 _gasForFinalise = _gasRemaining - _ourGasFloor;
             // make the call to finalise the interaction with the gas limit
             try IRollupProcessor(ROLLUP_PROCESSOR).processAsyncDefiInteraction{gas: _gasForFinalise}(_nonce) returns (
-                bool interactionCompleted
+                bool
             ) {
                 // no need to do anything here, we just need to know that the call didn't throw
             } catch {
@@ -211,7 +224,11 @@ contract TokemakBridge is BridgeBase {
      * @return expiryAvailable Flag specifying whether an expiry is available to be finalised
      * @return nonce The next interaction _nonce to be finalised
      */
-    function _getNextInteractionToFinalise(uint256 _gasFloor) internal returns (bool expiryAvailable, uint256 nonce) {
+    function _getNextInteractionToFinalise(uint256 _gasFloor)
+        internal
+        view
+        returns (bool expiryAvailable, uint256 nonce)
+    {
         // do we have any expiries and if so is the earliest expiry now expired
         uint256 _nonce = lastProcessedNonce;
         if (_nonce == 0 && firstAddedNonce != 0) {
@@ -242,24 +259,6 @@ contract TokemakBridge is BridgeBase {
     }
 
     /**
-     * @dev Function to check if we can withdraw
-     * @param _tAsset The tokemak lp token used to withdraw
-     * @param _inputValue Amount to withdraw
-     * @return withdraw if we can withdraw boolean
-     */
-    function _canWithdraw(address _tAsset, uint256 _inputValue) private returns (bool withdraw) {
-        Ttoken tToken = Ttoken(_tAsset);
-
-        // Get our current request withdrawal data
-        (uint256 minCycle, uint256 requestedWithdrawalAmount) = tToken.requestedWithdrawals(address(this));
-
-        // Get current cycle index
-        uint256 currentCycleIndex = IManager(MANAGER).getCurrentCycleIndex();
-
-        return (!(_inputValue > requestedWithdrawalAmount || currentCycleIndex < minCycle));
-    }
-
-    /**
      * @dev Function to add withdrawal _nonce
      * @param _nonce Current _nonce
      * @param _tAsset The tokemak lp token used to withdraw
@@ -270,8 +269,8 @@ contract TokemakBridge is BridgeBase {
         address _tAsset,
         uint256 _inputValue
     ) private {
-        Ttoken _tToken = Ttoken(_tAsset);
-        _tToken.requestWithdrawal(_inputValue);
+        Ttoken tToken = Ttoken(_tAsset);
+        tToken.requestWithdrawal(_inputValue);
         if (lastProcessedNonce == 0) {
             firstAddedNonce = _nonce;
         }
@@ -309,7 +308,7 @@ contract TokemakBridge is BridgeBase {
         uint256 beforeBalance = assetToken.balanceOf(address(this));
 
         //Check if the pool is EthPool because withdrawal function is different
-        if (asset == WETH) {
+        if (asset == address(WETH)) {
             tToken.withdraw(_inputValue, false);
         } else {
             tToken.withdraw(_inputValue);
@@ -345,9 +344,26 @@ contract TokemakBridge is BridgeBase {
         tToken.deposit(_inputValue);
 
         // Asset balance after withdrawal for calculating outputValue
-        uint256 afterBalance = tToken.balanceOf(address(this));
+        uint256 balance = tToken.balanceOf(address(this));
 
-        // Output Value
-        outputValue = afterBalance - beforeBalance;
+        outputValue = balance - beforeBalance;
+    }
+
+    /**
+     * @dev Function to check if we can withdraw
+     * @param _tAsset The tokemak lp token used to withdraw
+     * @param _inputValue Amount to withdraw
+     * @return withdraw if we can withdraw boolean
+     */
+    function _canWithdraw(address _tAsset, uint256 _inputValue) private view returns (bool withdraw) {
+        Ttoken tToken = Ttoken(_tAsset);
+
+        // Get our current request withdrawal data
+        (uint256 minCycle, uint256 requestedWithdrawalAmount) = tToken.requestedWithdrawals(address(this));
+
+        // Get current cycle index
+        uint256 currentCycleIndex = IManager(MANAGER).getCurrentCycleIndex();
+
+        return (!(_inputValue > requestedWithdrawalAmount || currentCycleIndex < minCycle));
     }
 }
